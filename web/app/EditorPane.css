@@ -2,21 +2,7 @@
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto 1fr;
-
-  > header {
-    padding: 1rem 1.25rem;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.16);
-
-    h2 {
-      margin: 0;
-    }
-
-    p {
-      margin: 0.35rem 0 0;
-      color: #94a3b8;
-    }
-  }
+  grid-template-rows: 1fr;
 }
 
 .stage {
@@ -25,8 +11,8 @@
 }
 
 .surface {
-  min-height: 0;
-  height: calc(100vh - 164px);
+  position: absolute;
+  inset: 0;
 }
 
 .empty {
@@ -38,10 +24,4 @@
   color: #94a3b8;
   background: rgba(13, 17, 23, 0.76);
   backdrop-filter: blur(4px);
-}
-
-@media (max-width: 960px) {
-  .surface {
-    height: 56vh;
-  }
 }

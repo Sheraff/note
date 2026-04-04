@@ -12,8 +12,6 @@ export type NoteContext = {
   settings(): AppSettings
   saveSettings(nextSettings: AppSettings): Promise<void>
   setEntries(entries: ListedEntry[]): void
-  setStatusMessage(message: string): void
-  setIsSaving(value: boolean): void
   setErrorMessage(message: string | null): void
   setEditorValue(value: string): void
 }
@@ -79,14 +77,7 @@ export async function saveCurrentNote(context: NoteContext): Promise<void> {
     return
   }
 
-  context.setIsSaving(true)
-
-  try {
-    await currentStorage.writeTextFile(path, context.draftContent())
-    context.setStatusMessage(`Saved ${path}`)
-  } finally {
-    context.setIsSaving(false)
-  }
+  await currentStorage.writeTextFile(path, context.draftContent())
 }
 
 function getCreateErrorMessage(kind: ListedEntry['kind']): string {
@@ -138,13 +129,11 @@ async function createEntry(
   try {
     if (kind === 'file') {
       await currentStorage.writeTextFile(path, '# Untitled\n')
-      context.setStatusMessage(`Created ${path}`)
       await refreshWorkspace(context, path)
       return null
     }
 
     await currentStorage.createDirectory(path)
-    context.setStatusMessage(`Created folder ${path}`)
     await refreshWorkspace(context, context.currentPath())
     return null
   } catch (error) {
@@ -180,6 +169,5 @@ export async function deleteEntry(context: NoteContext, entry: ListedEntry | nul
 
   context.setErrorMessage(null)
   await currentStorage.deleteEntry(entry.path)
-  context.setStatusMessage(entry.kind === 'directory' ? `Deleted folder ${entry.path}` : `Deleted ${entry.path}`)
   await refreshWorkspace(context, context.currentPath())
 }

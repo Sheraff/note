@@ -1,7 +1,7 @@
-import { Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
-import { AppHeader } from './app/AppHeader.tsx'
+import { createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import { EditorPane } from './app/EditorPane.tsx'
 import { NotesSidebar } from './app/NotesSidebar.tsx'
+import { StatusBar } from './app/StatusBar.tsx'
 import {
   createFolder,
   createNote,
@@ -38,10 +38,8 @@ function App() {
   const [entries, setEntries] = createSignal<ListedEntry[]>([])
   const [currentPath, setCurrentPath] = createSignal<string | null>(null)
   const [draftContent, setDraftContent] = createSignal('')
-  const [statusMessage, setStatusMessage] = createSignal('Loading workspace...')
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
   const [syncState, setSyncStateSignal] = createSignal<SyncState>({ files: [], lastSyncedAt: null })
-  const [isSaving, setIsSaving] = createSignal(false)
   const [isSyncing, setIsSyncing] = createSignal(false)
 
   const tree = createMemo(() => buildTree(entries()))
@@ -68,8 +66,6 @@ function App() {
     settings,
     saveSettings,
     setEntries,
-    setStatusMessage,
-    setIsSaving,
     setErrorMessage,
     setEditorValue(value) {
       editor?.setValue(value)
@@ -81,7 +77,6 @@ function App() {
     setSettings,
     saveSettings,
     setStorage,
-    setStatusMessage,
     setSyncState: setSyncStateSignal,
     setErrorMessage,
     refreshWorkspace(preferredPath) {
@@ -97,7 +92,6 @@ function App() {
     syncState,
     currentPath,
     setSyncState: setSyncStateSignal,
-    setStatusMessage,
     setIsSyncing,
     setErrorMessage,
     flushPendingSave,
@@ -186,10 +180,7 @@ function App() {
 
   onMount(() => {
     void mountEditor().catch(reportError)
-    void bootstrapWorkspace(storageContext).catch((error) => {
-      reportError(error)
-      setStatusMessage('Unable to load workspace.')
-    })
+    void bootstrapWorkspace(storageContext).catch(reportError)
   })
 
   onCleanup(() => {
@@ -202,19 +193,6 @@ function App() {
 
   return (
     <div class="app">
-      <AppHeader
-        isOpfsActive={isOpfsActive()}
-        isSyncing={isSyncing()}
-        lastSyncedAt={syncState().lastSyncedAt}
-        statusMessage={statusMessage()}
-        storageLabel={storageLabel()}
-        onAttachFolder={handleAttachFolder}
-        onSync={handleSync}
-        onSwitchToOpfs={handleSwitchToOpfs}
-      />
-      <Show when={errorMessage() !== null}>
-        <div class="error-banner">{errorMessage()}</div>
-      </Show>
       <main class="workspace">
         <NotesSidebar
           currentPath={currentPath()}
@@ -227,12 +205,21 @@ function App() {
         />
         <EditorPane
           currentPath={currentPath()}
-          isSaving={isSaving()}
           onEditorMount={(element) => {
             editorElement = element
           }}
         />
       </main>
+      <StatusBar
+        errorMessage={errorMessage()}
+        isOpfsActive={isOpfsActive()}
+        isSyncing={isSyncing()}
+        lastSyncedAt={syncState().lastSyncedAt}
+        storageLabel={storageLabel()}
+        onAttachFolder={handleAttachFolder}
+        onSync={handleSync}
+        onSwitchToOpfs={handleSwitchToOpfs}
+      />
     </div>
   )
 }

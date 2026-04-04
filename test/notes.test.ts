@@ -49,8 +49,6 @@ function createMockContext(storage: NoteStorage, setErrorMessage: (message: stri
     settings: () => settings,
     async saveSettings() {},
     setEntries() {},
-    setStatusMessage() {},
-    setIsSaving() {},
     setErrorMessage,
     setEditorValue() {},
   }

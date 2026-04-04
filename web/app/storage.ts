@@ -13,7 +13,6 @@ export type StorageContext = {
   setSettings(nextSettings: AppSettings): void
   saveSettings(nextSettings: AppSettings): Promise<void>
   setStorage(storage: NoteStorage): void
-  setStatusMessage(message: string): void
   setSyncState(syncState: SyncState): void
   setErrorMessage(message: string | null): void
   refreshWorkspace(preferredPath: string | null): Promise<void>
@@ -24,12 +23,10 @@ async function activateStorage(
   context: StorageContext,
   nextStorage: NoteStorage,
   nextSettings: AppSettings,
-  status: string,
 ) {
   context.setErrorMessage(null)
   context.setStorage(nextStorage)
   await context.saveSettings(nextSettings)
-  context.setStatusMessage(status)
   await context.refreshWorkspace(nextSettings.lastOpenedPath)
   context.focusEditor()
 }
@@ -43,7 +40,6 @@ export async function bootstrapWorkspace(context: StorageContext) {
 
   if (savedSettings.backend !== 'directory') {
     context.setStorage(createOpfsStorage())
-    context.setStatusMessage('Using browser-private storage (OPFS).')
     await context.refreshWorkspace(savedSettings.lastOpenedPath)
     return
   }
@@ -52,7 +48,6 @@ export async function bootstrapWorkspace(context: StorageContext) {
 
   if (handle !== null && (await hasDirectoryPermission(handle))) {
     context.setStorage(createDirectoryStorage(handle))
-    context.setStatusMessage(`Using folder ${handle.name}`)
     await context.refreshWorkspace(savedSettings.lastOpenedPath)
     return
   }
@@ -64,7 +59,6 @@ export async function bootstrapWorkspace(context: StorageContext) {
       ...savedSettings,
       backend: 'opfs',
     },
-    'Stored folder access is no longer available. Switched back to OPFS.',
   )
 }
 
@@ -88,7 +82,6 @@ export async function attachFolder(context: StorageContext) {
       ...context.settings(),
       backend: 'directory',
     },
-    `Using folder ${handle.name}`,
   )
 }
 
@@ -100,6 +93,5 @@ export async function switchToOpfs(context: StorageContext) {
       ...context.settings(),
       backend: 'opfs',
     },
-    'Using browser-private storage (OPFS).',
   )
 }

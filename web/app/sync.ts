@@ -11,7 +11,6 @@ export type SyncContext = {
   syncState(): SyncState
   currentPath(): string | null
   setSyncState(syncState: SyncState): void
-  setStatusMessage(message: string): void
   setIsSyncing(value: boolean): void
   setErrorMessage(message: string | null): void
   flushPendingSave(): Promise<void>
@@ -38,7 +37,6 @@ export async function syncNow(context: SyncContext) {
     context.setSyncState(nextSyncState)
     await setSyncState(nextSyncState)
     await context.refreshWorkspace(context.currentPath())
-    context.setStatusMessage(`Synced ${nextSyncState.files.length} records.`)
   } finally {
     context.setIsSyncing(false)
   }

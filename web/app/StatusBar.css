@@ -1,0 +1,119 @@
+.statusbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 0.5rem;
+  height: 1.5rem;
+  font-size: 0.75rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(9, 14, 24, 0.82);
+}
+
+.statusbar-left {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+}
+
+.statusbar-message {
+  color: #fecaca;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.statusbar-button {
+  border: none;
+  background: transparent;
+  padding: 0 0.5rem;
+  height: 1.5rem;
+  font-size: 0.75rem;
+  border-radius: 3px;
+  gap: 0.35rem;
+
+  > svg {
+    width: 0.8rem;
+    height: 0.8rem;
+  }
+
+  > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: transparent;
+  }
+
+  &[aria-busy='true'] > svg {
+    animation: statusbar-spin 1s linear infinite;
+  }
+}
+
+.statusbar-storage {
+  min-width: 0;
+}
+
+.statusbar-storage .statusbar-button {
+  anchor-name: --statusbar-storage-anchor;
+  max-width: 14rem;
+}
+
+.statusbar-storage-popover {
+  position: fixed;
+  position-anchor: --statusbar-storage-anchor;
+  inset: auto;
+  bottom: calc(anchor(top) + 0.45rem);
+  left: anchor(left);
+  margin: 0;
+  min-width: 12rem;
+  max-width: min(18rem, calc(100vw - 2rem));
+  padding: 0.4rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 14px;
+  background: rgba(9, 14, 24, 0.96);
+  box-shadow: 0 18px 48px rgba(2, 6, 23, 0.42);
+
+  &::backdrop {
+    background: transparent;
+  }
+
+  > button {
+    width: 100%;
+    border: none;
+    border-radius: 10px;
+    padding: 0.65rem 0.75rem;
+    justify-content: flex-start;
+    background: transparent;
+    font-size: 0.875rem;
+
+    &:hover {
+      background: rgba(59, 130, 246, 0.16);
+      border-color: transparent;
+    }
+
+    &:disabled {
+      background: transparent;
+    }
+  }
+}
+
+@keyframes statusbar-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}

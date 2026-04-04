@@ -1,5 +1,5 @@
 import { createMemo, createSignal, onCleanup, onMount } from 'solid-js'
-import './AppHeader.css'
+import './StatusBar.css'
 import { Codicon } from './Codicon.tsx'
 
 const relativeTimeFormat = new Intl.RelativeTimeFormat(undefined, {
@@ -55,11 +55,11 @@ function formatAbsoluteSyncTime(timestamp: string): string | null {
   return absoluteTimeFormat.format(syncedAt)
 }
 
-export function AppHeader(props: {
+export function StatusBar(props: {
+  errorMessage: string | null
   isSyncing: boolean
   isOpfsActive: boolean
   lastSyncedAt: string | null
-  statusMessage: string
   storageLabel: string
   onAttachFolder(): void
   onSync(): void
@@ -102,19 +102,17 @@ export function AppHeader(props: {
   })
 
   return (
-    <header class="topbar">
-      <div>
-        <h1>Note</h1>
-        <p>{props.statusMessage}</p>
+    <footer class="statusbar">
+      <div class="statusbar-left">
+        <span class="statusbar-message">{props.errorMessage}</span>
       </div>
-      <div class="actions">
-        <div class="storage-menu">
-          <button type="button" class="storage-menu-trigger" popovertarget={storagePopoverId}>
+      <div class="statusbar-right">
+        <div class="statusbar-storage">
+          <button type="button" class="statusbar-button" popovertarget={storagePopoverId}>
             <Codicon name="database" />
-            <span class="storage-menu-label">Storage: {props.storageLabel}</span>
-            <Codicon name="chevron-down" />
+            <span>{props.storageLabel}</span>
           </button>
-          <div id={storagePopoverId} class="storage-menu-popover" popover="auto">
+          <div id={storagePopoverId} class="statusbar-storage-popover" popover="auto">
             <button
               type="button"
               popovertarget={storagePopoverId}
@@ -138,7 +136,7 @@ export function AppHeader(props: {
         </div>
         <button
           type="button"
-          class="sync-button"
+          class="statusbar-button"
           onClick={props.onSync}
           disabled={props.isSyncing}
           aria-busy={props.isSyncing}
@@ -148,6 +146,6 @@ export function AppHeader(props: {
           <span>{syncLabel()}</span>
         </button>
       </div>
-    </header>
+    </footer>
   )
 }
