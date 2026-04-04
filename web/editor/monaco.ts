@@ -1,12 +1,12 @@
 import * as monaco from 'monaco-editor'
 // import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution'
-// import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
+import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
 
-// self.MonacoEnvironment = {
-//   getWorker() {
-//     return new EditorWorker()
-//   },
-// }
+self.MonacoEnvironment = {
+  getWorker() {
+    return new EditorWorker()
+  },
+}
 
 export type MonacoController = {
   getValue(): string
