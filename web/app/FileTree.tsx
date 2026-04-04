@@ -1,6 +1,7 @@
 import { For, Match, Switch, createSignal } from 'solid-js'
 import { Codicon } from './Codicon.tsx'
-import type { TreeNode } from './notes/tree.ts'
+import type { TreeNode } from '#web/notes/tree.ts'
+import './FileTree.css'
 
 function DirectoryNode(props: {
   currentPath: string | null
@@ -36,7 +37,7 @@ export function FileTree(props: {
               </Match>
               <Match when={node.kind === 'file'}>
                 <button
-                  classList={{ active: props.currentPath === node.path }}
+                  aria-current={props.currentPath === node.path ? 'true' : undefined}
                   type="button"
                   onClick={() => {
                     props.onOpen(node.path)

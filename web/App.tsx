@@ -1,33 +1,24 @@
 import { Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
-import { createApiClient } from './api.ts'
-import { Codicon } from './Codicon.tsx'
+import { AppHeader } from './app/AppHeader.tsx'
+import { EditorPane } from './app/EditorPane.tsx'
+import { NotesSidebar } from './app/NotesSidebar.tsx'
+import {
+  createFolder,
+  createNote,
+  deleteCurrentNote,
+  loadNote,
+  refreshWorkspace,
+  saveCurrentNote,
+  type NoteContext,
+} from './app/notes.ts'
+import { attachFolder, bootstrapWorkspace, switchToOpfs, type StorageContext } from './app/storage.ts'
+import { syncNow, type SyncContext } from './app/sync.ts'
 import type { MonacoController } from './editor/monaco.ts'
-import { FileTree } from './FileTree.tsx'
-import { ensureMarkdownExtension, getParentPath, normalizeNotePath } from './notes/paths.ts'
-import { syncWithServer } from './notes/sync.ts'
 import { buildTree } from './notes/tree.ts'
-import {
-  DEFAULT_APP_SETTINGS,
-  type AppSettings,
-  type SyncState,
-} from './schemas.ts'
-import {
-  createDirectoryStorage,
-  hasDirectoryPermission,
-  pickDirectoryHandle,
-} from './storage/file-system-access.ts'
-import {
-  getAppSettings,
-  getDirectoryHandle,
-  getSyncState,
-  setAppSettings,
-  setDirectoryHandle,
-  setSyncState,
-} from './storage/metadata.ts'
-import { createOpfsStorage } from './storage/opfs.ts'
-import { isDirectoryPickerSupported, type ListedEntry, type NoteStorage } from './storage/types.ts'
-
-const api = createApiClient()
+import { DEFAULT_APP_SETTINGS, type AppSettings, type SyncState } from './schemas.ts'
+import { setAppSettings } from './storage/metadata.ts'
+import type { ListedEntry, NoteStorage } from './storage/types.ts'
+import './App.css'
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -43,7 +34,7 @@ function App() {
   let saveTimeout: number | undefined
 
   const [storage, setStorage] = createSignal<NoteStorage | null>(null)
-  const [settings, setSettingsSignal] = createSignal<AppSettings>(DEFAULT_APP_SETTINGS)
+  const [settings, setSettings] = createSignal<AppSettings>(DEFAULT_APP_SETTINGS)
   const [entries, setEntries] = createSignal<ListedEntry[]>([])
   const [currentPath, setCurrentPath] = createSignal<string | null>(null)
   const [draftContent, setDraftContent] = createSignal('')
@@ -54,80 +45,68 @@ function App() {
   const [isSyncing, setIsSyncing] = createSignal(false)
 
   const tree = createMemo(() => buildTree(entries()))
-  const fileEntries = createMemo(() => entries().filter((entry) => entry.kind === 'file'))
+  const fileCount = createMemo(() => entries().filter((entry) => entry.kind === 'file').length)
+  const storageLabel = createMemo(() => storage()?.label ?? 'Loading...')
+  const lastSyncLabel = createMemo(() => {
+    const lastSyncedAt = syncState().lastSyncedAt
+    return lastSyncedAt === null ? 'Not synced yet' : `Last sync ${lastSyncedAt}`
+  })
+  const isOpfsActive = createMemo(() => settings().backend === 'opfs')
 
-  function clearMessages() {
-    setErrorMessage(null)
+  function reportError(error: unknown) {
+    setErrorMessage(getErrorMessage(error))
   }
 
-  async function persistSettings(next: AppSettings) {
-    setSettingsSignal(next)
-    await setAppSettings(next)
+  async function saveSettings(nextSettings: AppSettings) {
+    setSettings(nextSettings)
+    await setAppSettings(nextSettings)
   }
 
-  async function loadNote(path: string | null): Promise<void> {
-    const currentStorage = storage()
-
-    if (currentStorage === null || path === null) {
-      setCurrentPath(null)
-      setDraftContent('')
-      editor?.setValue('')
-      return
-    }
-
-    const file = await currentStorage.readTextFile(path)
-
-    if (file === null) {
-      await refreshWorkspace(null)
-      return
-    }
-
-    setCurrentPath(file.path)
-    setDraftContent(file.content)
-    editor?.setValue(file.content)
-    await persistSettings({
-      ...settings(),
-      lastOpenedPath: file.path,
-    })
+  const noteContext: NoteContext = {
+    storage,
+    currentPath,
+    setCurrentPath,
+    draftContent,
+    setDraftContent,
+    settings,
+    saveSettings,
+    setEntries,
+    setStatusMessage,
+    setIsSaving,
+    setErrorMessage,
+    setEditorValue(value) {
+      editor?.setValue(value)
+    },
   }
 
-  async function refreshWorkspace(preferredPath: string | null): Promise<void> {
-    const currentStorage = storage()
-
-    if (currentStorage === null) {
-      return
-    }
-
-    const nextEntries = await currentStorage.listEntries()
-    setEntries(nextEntries)
-
-    const filePaths = nextEntries.filter((entry) => entry.kind === 'file').map((entry) => entry.path)
-    const activePath = currentPath()
-    const desiredPath =
-      (preferredPath !== null && filePaths.includes(preferredPath) && preferredPath) ||
-      (activePath !== null && filePaths.includes(activePath) && activePath) ||
-      filePaths[0] ||
-      null
-
-    await loadNote(desiredPath)
+  const storageContext: StorageContext = {
+    settings,
+    setSettings,
+    saveSettings,
+    setStorage,
+    setStatusMessage,
+    setSyncState: setSyncStateSignal,
+    setErrorMessage,
+    refreshWorkspace(preferredPath) {
+      return refreshWorkspace(noteContext, preferredPath)
+    },
+    focusEditor() {
+      editor?.focus()
+    },
   }
 
-  async function saveCurrentNote(): Promise<void> {
-    const currentStorage = storage()
-    const path = currentPath()
-
-    if (currentStorage === null || path === null) {
-      return
-    }
-
-    setIsSaving(true)
-
-    try {
-      await currentStorage.writeTextFile(path, draftContent())
-      setStatusMessage(`Saved ${path}`)
-    } finally {
-      setIsSaving(false)
-    }
+  const syncContext: SyncContext = {
+    storage,
+    syncState,
+    currentPath,
+    setSyncState: setSyncStateSignal,
+    setStatusMessage,
+    setIsSyncing,
+    setErrorMessage,
+    flushPendingSave,
+    refreshWorkspace(preferredPath) {
+      return refreshWorkspace(noteContext, preferredPath)
+    },
   }
 
   function scheduleSave() {
@@ -136,202 +115,17 @@ function App() {
     }
 
     saveTimeout = window.setTimeout(() => {
-      void saveCurrentNote().catch((error: unknown) => {
-        setErrorMessage(getErrorMessage(error))
-      })
+      void saveCurrentNote(noteContext).catch(reportError)
     }, 400)
   }
 
-  async function flushPendingSave(): Promise<void> {
+  async function flushPendingSave() {
     if (saveTimeout !== undefined) {
       window.clearTimeout(saveTimeout)
       saveTimeout = undefined
     }
 
-    await saveCurrentNote()
-  }
-
-  async function switchStorage(nextStorage: NoteStorage, nextSettings: AppSettings, status: string) {
-    clearMessages()
-    setStorage(nextStorage)
-    await persistSettings(nextSettings)
-    setStatusMessage(status)
-    await refreshWorkspace(nextSettings.lastOpenedPath)
-    editor?.focus()
-  }
-
-  async function bootstrapWorkspace(): Promise<void> {
-    const loadedSettings = await getAppSettings()
-    const loadedSyncState = await getSyncState()
-    setSettingsSignal(loadedSettings)
-    setSyncStateSignal(loadedSyncState)
-
-    if (loadedSettings.backend === 'directory') {
-      const handle = await getDirectoryHandle()
-
-      if (handle !== null && (await hasDirectoryPermission(handle))) {
-        await switchStorage(
-          createDirectoryStorage(handle),
-          loadedSettings,
-          `Using folder ${handle.name}`,
-        )
-        return
-      }
-
-      await switchStorage(
-        createOpfsStorage(),
-        {
-          ...loadedSettings,
-          backend: 'opfs',
-        },
-        'Stored folder access is no longer available. Switched back to OPFS.',
-      )
-      return
-    }
-
-    await switchStorage(createOpfsStorage(), loadedSettings, 'Using browser-private storage (OPFS).')
-  }
-
-  async function createNote() {
-    const currentStorage = storage()
-
-    if (currentStorage === null) {
-      return
-    }
-
-    const defaultDirectory = getParentPath(currentPath() ?? '')
-    const defaultPath = defaultDirectory === null ? 'untitled.md' : `${defaultDirectory}/untitled.md`
-    const value = window.prompt('New note path', defaultPath)
-
-    if (value === null) {
-      return
-    }
-
-    const path = ensureMarkdownExtension(value)
-
-    if (path.length === 0) {
-      setErrorMessage('Enter a valid note path.')
-      return
-    }
-
-    clearMessages()
-    await currentStorage.writeTextFile(path, '# Untitled\n')
-    setStatusMessage(`Created ${path}`)
-    await refreshWorkspace(path)
-  }
-
-  async function createFolder() {
-    const currentStorage = storage()
-
-    if (currentStorage === null) {
-      return
-    }
-
-    const defaultDirectory = getParentPath(currentPath() ?? '') ?? 'notes'
-    const value = window.prompt('New folder path', defaultDirectory)
-
-    if (value === null) {
-      return
-    }
-
-    const path = normalizeNotePath(value)
-
-    if (path.length === 0) {
-      setErrorMessage('Enter a valid folder path.')
-      return
-    }
-
-    clearMessages()
-    await currentStorage.createDirectory(path)
-    setStatusMessage(`Created folder ${path}`)
-    await refreshWorkspace(currentPath())
-  }
-
-  async function deleteCurrentNote() {
-    const currentStorage = storage()
-    const path = currentPath()
-
-    if (currentStorage === null || path === null) {
-      return
-    }
-
-    if (!window.confirm(`Delete ${path}?`)) {
-      return
-    }
-
-    clearMessages()
-    await currentStorage.deleteEntry(path)
-    setStatusMessage(`Deleted ${path}`)
-    await refreshWorkspace(null)
-  }
-
-  async function attachFolder() {
-    if (!isDirectoryPickerSupported()) {
-      setErrorMessage('This browser does not support the File System Access API.')
-      return
-    }
-
-    clearMessages()
-
-    try {
-      const handle = await pickDirectoryHandle()
-
-      if (!(await hasDirectoryPermission(handle))) {
-        throw new Error('Folder access was not granted')
-      }
-
-      await setDirectoryHandle(handle)
-      await switchStorage(
-        createDirectoryStorage(handle),
-        {
-          ...settings(),
-          backend: 'directory',
-        },
-        `Using folder ${handle.name}`,
-      )
-    } catch (error) {
-      setErrorMessage(getErrorMessage(error))
-    }
-  }
-
-  async function useOpfs() {
-    clearMessages()
-    await switchStorage(
-      createOpfsStorage(),
-      {
-        ...settings(),
-        backend: 'opfs',
-      },
-      'Using browser-private storage (OPFS).',
-    )
-  }
-
-  async function syncNow() {
-    const currentStorage = storage()
-
-    if (currentStorage === null) {
-      return
-    }
-
-    clearMessages()
-    setIsSyncing(true)
-
-    try {
-      await flushPendingSave()
-      const nextSyncState = await syncWithServer({
-        api,
-        previousState: syncState(),
-        storage: currentStorage,
-      })
-      setSyncStateSignal(nextSyncState)
-      await setSyncState(nextSyncState)
-      await refreshWorkspace(currentPath())
-      setStatusMessage(`Synced ${nextSyncState.files.length} records.`)
-    } catch (error) {
-      setErrorMessage(getErrorMessage(error))
-    } finally {
-      setIsSyncing(false)
-    }
+    await saveCurrentNote(noteContext)
   }
 
   async function mountEditor() {
@@ -348,20 +142,43 @@ function App() {
         scheduleSave()
       },
       onSave() {
-        void flushPendingSave().catch((error: unknown) => {
-          setErrorMessage(getErrorMessage(error))
-        })
+        void flushPendingSave().catch(reportError)
       },
     })
   }
 
-  onMount(() => {
-    void mountEditor().catch((error: unknown) => {
-      setErrorMessage(getErrorMessage(error))
-    })
+  function handleCreateNote() {
+    void createNote(noteContext).catch(reportError)
+  }
 
-    void bootstrapWorkspace().catch((error: unknown) => {
-      setErrorMessage(getErrorMessage(error))
+  function handleCreateFolder() {
+    void createFolder(noteContext).catch(reportError)
+  }
+
+  function handleDeleteNote() {
+    void deleteCurrentNote(noteContext).catch(reportError)
+  }
+
+  function handleAttachFolder() {
+    void attachFolder(storageContext).catch(reportError)
+  }
+
+  function handleSwitchToOpfs() {
+    void switchToOpfs(storageContext).catch(reportError)
+  }
+
+  function handleSync() {
+    void syncNow(syncContext).catch(reportError)
+  }
+
+  function handleOpenNote(path: string) {
+    void flushPendingSave().then(() => loadNote(noteContext, path)).catch(reportError)
+  }
+
+  onMount(() => {
+    void mountEditor().catch(reportError)
+    void bootstrapWorkspace(storageContext).catch((error) => {
+      reportError(error)
       setStatusMessage('Unable to load workspace.')
     })
   })
@@ -375,93 +192,38 @@ function App() {
   })
 
   return (
-    <div class="app-shell">
-      <header class="topbar">
-        <div>
-          <h1>Note</h1>
-          <p>{statusMessage()}</p>
-        </div>
-        <div class="topbar-actions">
-          <span class="pill">
-            <span>
-              <Codicon name="database" />
-              <span>Storage: {storage()?.label ?? 'Loading...'}</span>
-            </span>
-          </span>
-          <span class="pill">
-            <span>
-              <Codicon name="history" />
-              <span>
-                {syncState().lastSyncedAt === null ? 'Not synced yet' : `Last sync ${syncState().lastSyncedAt}`}
-              </span>
-            </span>
-          </span>
-          <button type="button" onClick={() => void createNote()}>
-            <Codicon name="new-file" />
-            <span>New note</span>
-          </button>
-          <button type="button" onClick={() => void createFolder()}>
-            <Codicon name="new-folder" />
-            <span>New folder</span>
-          </button>
-          <button type="button" onClick={() => void deleteCurrentNote()} disabled={currentPath() === null}>
-            <Codicon name="trash" />
-            <span>Delete note</span>
-          </button>
-          <button type="button" onClick={() => void attachFolder()}>
-            <Codicon name="folder-library" />
-            <span>Attach folder</span>
-          </button>
-          <button type="button" onClick={() => void useOpfs()} disabled={settings().backend === 'opfs'}>
-            <Codicon name="database" />
-            <span>Use OPFS</span>
-          </button>
-          <button type="button" onClick={() => void syncNow()} disabled={isSyncing()} aria-busy={isSyncing()}>
-            <Codicon name={isSyncing() ? 'loading' : 'sync'} />
-            <span>{isSyncing() ? 'Syncing...' : 'Sync'}</span>
-          </button>
-        </div>
-      </header>
+    <div class="app">
+      <AppHeader
+        canDelete={currentPath() !== null}
+        isOpfsActive={isOpfsActive()}
+        isSyncing={isSyncing()}
+        statusMessage={statusMessage()}
+        storageLabel={storageLabel()}
+        syncLabel={lastSyncLabel()}
+        onAttachFolder={handleAttachFolder}
+        onCreateFolder={handleCreateFolder}
+        onCreateNote={handleCreateNote}
+        onDeleteNote={handleDeleteNote}
+        onSync={handleSync}
+        onSwitchToOpfs={handleSwitchToOpfs}
+      />
       <Show when={errorMessage() !== null}>
         <div class="error-banner">{errorMessage()}</div>
       </Show>
       <main class="workspace">
-        <aside class="sidebar">
-          <div class="sidebar-header">
-            <h2>Notes</h2>
-            <span>{fileEntries().length}</span>
-          </div>
-          <Show
-            when={tree().length > 0}
-            fallback={<p class="empty-state">Create a note to start writing.</p>}
-          >
-            <FileTree
-              currentPath={currentPath()}
-              nodes={tree()}
-              onOpen={(path) => {
-                void flushPendingSave()
-                  .then(() => loadNote(path))
-                  .catch((error: unknown) => {
-                    setErrorMessage(getErrorMessage(error))
-                  })
-              }}
-            />
-          </Show>
-        </aside>
-        <section class="editor-pane">
-          <div class="editor-header">
-            <div>
-              <h2>{currentPath() ?? 'No note selected'}</h2>
-              <p>{isSaving() ? 'Saving...' : 'Autosave enabled. Press Ctrl/Cmd+S to save now.'}</p>
-            </div>
-          </div>
-          <div class="editor-stage">
-            <div class="editor-surface" ref={editorElement} />
-            <Show when={currentPath() === null}>
-              <div class="editor-empty">Select a note from the sidebar or create one.</div>
-            </Show>
-          </div>
-        </section>
+        <NotesSidebar
+          currentPath={currentPath()}
+          fileCount={fileCount()}
+          nodes={tree()}
+          onOpen={handleOpenNote}
+        />
+        <EditorPane
+          currentPath={currentPath()}
+          isSaving={isSaving()}
+          onEditorMount={(element) => {
+            editorElement = element
+          }}
+        />
       </main>
     </div>
   )

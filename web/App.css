@@ -1,0 +1,26 @@
+.app {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  min-height: 100vh;
+}
+
+.error-banner {
+  margin: 1rem 1.5rem 0;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  background: rgba(127, 29, 29, 0.3);
+  color: #fecaca;
+  border-radius: 12px;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  min-height: 0;
+}
+
+@media (max-width: 960px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,68 @@
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: 1.25rem 1.5rem 1rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(9, 14, 24, 0.82);
+  backdrop-filter: blur(18px);
+
+  h1 {
+    margin: 0;
+  }
+
+  p {
+    margin: 0.35rem 0 0;
+    color: #94a3b8;
+  }
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  justify-content: flex-end;
+
+  > button[aria-busy='true'] > svg {
+    animation: spin 1s linear infinite;
+  }
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  padding: 0.55rem 0.9rem;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.55);
+
+  > svg {
+    width: 1rem;
+    height: 1rem;
+    flex: none;
+    fill: currentColor;
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 960px) {
+  .topbar {
+    flex-direction: column;
+  }
+
+  .actions {
+    justify-content: flex-start;
+  }
+}
