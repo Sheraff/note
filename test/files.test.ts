@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createConflictCopyPath, normalizeNotePath } from '../server/files.ts'
-import { ensureMarkdownExtension, joinNotePath } from '../web/notes/paths.ts'
+import { ensureMarkdownExtension, joinNotePath, normalizeRelativeCreatePath } from '../web/notes/paths.ts'
 import { buildTree } from '../web/notes/tree.ts'
 
 describe('note paths', () => {
@@ -13,6 +13,14 @@ describe('note paths', () => {
     expect(ensureMarkdownExtension('notes/plan')).toBe('notes/plan.md')
     expect(ensureMarkdownExtension('notes/plan.md')).toBe('notes/plan.md')
     expect(joinNotePath('notes/daily', 'today.md')).toBe('notes/daily/today.md')
+  })
+
+  it('accepts nested relative create paths and rejects escaping input', () => {
+    expect(normalizeRelativeCreatePath(' notes/today.md ')).toBe('notes/today.md')
+    expect(normalizeRelativeCreatePath('../today.md')).toBe('')
+    expect(normalizeRelativeCreatePath('~/today.md')).toBe('')
+    expect(normalizeRelativeCreatePath('/tmp/today.md')).toBe('')
+    expect(normalizeRelativeCreatePath('C:\\Users\\flo\\today.md')).toBe('')
   })
 
   it('creates filesystem-safe conflict file names', () => {

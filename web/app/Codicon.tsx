@@ -5,7 +5,7 @@ export type CodiconName = keyof typeof IconMeta
 
 export function Codicon(props: { name: CodiconName }) {
   return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
+    <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16">
       <use href={`${codiconSpriteUrl}#${props.name}`} />
     </svg>
   )

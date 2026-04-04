@@ -1,9 +1,10 @@
-import { ensureMarkdownExtension, getParentPath, joinNotePath, normalizeNotePath } from '../notes/paths.ts'
+import { ensureMarkdownExtension, joinNotePath, normalizeRelativeCreatePath } from '../notes/paths.ts'
 import type { AppSettings } from '../schemas.ts'
 import type { ListedEntry, NoteStorage } from '../storage/types.ts'
 
 export type NoteContext = {
   storage(): NoteStorage | null
+  entries(): ListedEntry[]
   currentPath(): string | null
   setCurrentPath(path: string | null): void
   draftContent(): string
@@ -88,68 +89,79 @@ export async function saveCurrentNote(context: NoteContext): Promise<void> {
   }
 }
 
-export async function createNote(context: NoteContext) {
-  return createNoteInDirectory(context)
+function getCreateErrorMessage(kind: ListedEntry['kind']): string {
+  return kind === 'directory' ? 'Enter a valid folder path.' : 'Enter a valid note path.'
 }
 
-export async function createNoteInDirectory(context: NoteContext, directoryPath?: string | null) {
+function getCreateFailureMessage(kind: ListedEntry['kind'], error: unknown): string {
+  if (error instanceof Error && error.message.includes('Name is not allowed')) {
+    return getCreateErrorMessage(kind)
+  }
+
+  if (error instanceof Error) {
+    return error.message
+  }
+
+  return 'Unknown error'
+}
+
+function getConflictingEntryName(kind: ListedEntry['kind'], name: string): string {
+  return kind === 'directory' ? name : ensureMarkdownExtension(name)
+}
+
+async function createEntry(
+  context: NoteContext,
+  kind: ListedEntry['kind'],
+  parentPath: string | null,
+  name: string,
+): Promise<string | null> {
   const currentStorage = context.storage()
 
   if (currentStorage === null) {
-    return
-  }
-
-  const defaultDirectory = directoryPath === undefined ? getParentPath(context.currentPath() ?? '') : directoryPath
-  const defaultPath = joinNotePath(defaultDirectory, 'untitled.md')
-  const value = window.prompt('New note path', defaultPath)
-
-  if (value === null) {
-    return
-  }
-
-  const path = ensureMarkdownExtension(value)
-
-  if (path.length === 0) {
-    context.setErrorMessage('Enter a valid note path.')
-    return
+    return 'Storage is not ready yet.'
   }
 
   context.setErrorMessage(null)
-  await currentStorage.writeTextFile(path, '# Untitled\n')
-  context.setStatusMessage(`Created ${path}`)
-  await refreshWorkspace(context, path)
+
+  const normalizedName = normalizeRelativeCreatePath(name)
+
+  if (normalizedName.length === 0) {
+    return getCreateErrorMessage(kind)
+  }
+
+  const path = joinNotePath(parentPath, getConflictingEntryName(kind, normalizedName))
+
+  if (context.entries().some((entry) => entry.path === path)) {
+    return `An entry named "${getConflictingEntryName(kind, normalizedName)}" already exists here.`
+  }
+
+  try {
+    if (kind === 'file') {
+      await currentStorage.writeTextFile(path, '# Untitled\n')
+      context.setStatusMessage(`Created ${path}`)
+      await refreshWorkspace(context, path)
+      return null
+    }
+
+    await currentStorage.createDirectory(path)
+    context.setStatusMessage(`Created folder ${path}`)
+    await refreshWorkspace(context, context.currentPath())
+    return null
+  } catch (error) {
+    return getCreateFailureMessage(kind, error)
+  }
 }
 
-export async function createFolder(context: NoteContext) {
-  return createFolderInDirectory(context)
+export async function createNote(context: NoteContext, parentPath: string | null, name: string): Promise<string | null> {
+  return createEntry(context, 'file', parentPath, name)
 }
 
-export async function createFolderInDirectory(context: NoteContext, directoryPath?: string | null) {
-  const currentStorage = context.storage()
-
-  if (currentStorage === null) {
-    return
-  }
-
-  const defaultPath =
-    directoryPath === undefined ? (getParentPath(context.currentPath() ?? '') ?? 'notes') : joinNotePath(directoryPath, 'untitled')
-  const value = window.prompt('New folder path', defaultPath)
-
-  if (value === null) {
-    return
-  }
-
-  const path = normalizeNotePath(value)
-
-  if (path.length === 0) {
-    context.setErrorMessage('Enter a valid folder path.')
-    return
-  }
-
-  context.setErrorMessage(null)
-  await currentStorage.createDirectory(path)
-  context.setStatusMessage(`Created folder ${path}`)
-  await refreshWorkspace(context, context.currentPath())
+export async function createFolder(
+  context: NoteContext,
+  parentPath: string | null,
+  name: string,
+): Promise<string | null> {
+  return createEntry(context, 'directory', parentPath, name)
 }
 
 export async function deleteEntry(context: NoteContext, entry: ListedEntry | null) {

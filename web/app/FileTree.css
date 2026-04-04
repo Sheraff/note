@@ -6,24 +6,26 @@
   li {
     margin: 0.15rem 0;
 
-    > .tree-row {
+    >.tree-row {
       display: flex;
       align-items: center;
       gap: 0.35rem;
       min-width: 0;
 
-      > button:first-child {
+      >.tree-entry {
         flex: 1 1 auto;
         min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
         text-align: left;
         border: none;
         background: transparent;
         padding: 0.35rem 0.5rem;
         border-radius: 8px;
-        justify-content: flex-start;
         color: #cbd5e1;
 
-        > span {
+        >span {
           min-width: 0;
           overflow: hidden;
           text-overflow: ellipsis;
@@ -31,13 +33,18 @@
         }
       }
 
-      > button[aria-current='true'],
-      &:hover > button:first-child,
-      &:focus-within > button:first-child {
+      >button.tree-entry {
+        cursor: pointer;
+        justify-content: flex-start;
+      }
+
+      >.tree-entry[aria-current='true'],
+      &:hover>.tree-entry,
+      &:focus-within>.tree-entry {
         background: rgba(59, 130, 246, 0.16);
       }
 
-      > .tree-actions {
+      >.tree-actions {
         display: flex;
         flex: none;
         gap: 0.2rem;
@@ -45,7 +52,7 @@
         visibility: hidden;
         pointer-events: none;
 
-        > button {
+        >button {
           padding: 0.35rem;
           border-color: transparent;
           background: transparent;
@@ -56,15 +63,15 @@
         }
       }
 
-      &:hover > .tree-actions,
-      &:focus-within > .tree-actions {
+      &:hover>.tree-actions,
+      &:focus-within>.tree-actions {
         opacity: 1;
         visibility: visible;
         pointer-events: auto;
       }
     }
 
-    > .tree {
+    >.tree {
       list-style: none;
       margin: 0;
       padding-left: 0.95rem;
@@ -72,11 +79,54 @@
   }
 }
 
+.tree .tree-row.tree-row-create {
+  >.tree-entry {
+    cursor: text;
+
+    >input {
+      flex: 1 1 auto;
+      width: 100%;
+      min-width: 0;
+      border: none;
+      background: transparent;
+      color: inherit;
+      padding: 0;
+      outline: none;
+      anchor-name: --tree-create-anchor;
+    }
+
+    >[role='alert'] {
+      position: fixed;
+      position-anchor: --tree-create-anchor;
+      top: calc(anchor(bottom) + 0.35rem);
+      left: anchor(left);
+      margin: 0;
+      max-width: min(18rem, calc(100vw - 2rem));
+      padding: 0.45rem 0.6rem;
+      border: 1px solid rgba(248, 113, 113, 0.42);
+      border-radius: 10px;
+      background: rgba(69, 10, 10, 0.96);
+      color: #fecaca;
+      box-shadow: 0 14px 36px rgba(2, 6, 23, 0.4);
+      z-index: 20;
+    }
+  }
+
+  >.tree-entry:has(input[aria-invalid='true']) {
+    background: rgba(127, 29, 29, 0.34);
+    outline: 1px solid rgba(248, 113, 113, 0.45);
+
+    >input {
+      color: #fecaca;
+    }
+  }
+}
+
 @media (hover: none) {
   .tree {
     li {
-      > .tree-row {
-        > .tree-actions {
+      >.tree-row {
+        >.tree-actions {
           opacity: 1;
           visibility: visible;
           pointer-events: auto;

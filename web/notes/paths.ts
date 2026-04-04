@@ -30,6 +30,26 @@ export function ensureMarkdownExtension(path: string): string {
   return `${normalized}.md`
 }
 
+export function normalizeRelativeCreatePath(input: string): string {
+  const trimmed = input.trim()
+
+  if (trimmed.startsWith('/') || trimmed.startsWith('\\') || trimmed.startsWith('~')) {
+    return ''
+  }
+
+  if (/^[A-Za-z]:([\\/]|$)/.test(trimmed)) {
+    return ''
+  }
+
+  const normalized = normalizeNotePath(trimmed)
+
+  if (normalized.length === 0 || normalized.split('/').some((segment) => segment === '~')) {
+    return ''
+  }
+
+  return normalized
+}
+
 export function getParentPath(path: string): string | null {
   const normalized = normalizeNotePath(path)
   const separatorIndex = normalized.lastIndexOf('/')

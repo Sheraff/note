@@ -3,7 +3,7 @@
 - [x] "last sync <date>" + sync button => should combine in a single button
 - [x] date should display as human readable using `Intl.RelativeTimeFormat`
 - [x] new note / new folder / delete note => should all be buttons in the sidebar. (delete => appears when hovering folder or file, new note / new folder => appears on hover of a folder, and in the header)
-- [ ] improve file/folder creation flow: do not use the native prompt, instead show an input *where the new file/folder should be* (so if i click "new note" on a folder, it should show an input in the folder, and if i click "new note" in the header, it should show an input in the root). This input should be the size and appearance of a normal file/folder name, and when i submit it (by pressing enter or blurring the input), it should create the file/folder with that name.
+- [x] improve file/folder creation flow: do not use the native prompt, instead show an input *where the new file/folder should be* (so if i click "new note" on a folder, it should show an input in the folder, and if i click "new note" in the header, it should show an input in the root). This input should be the size and appearance of a normal file/folder name, and when i submit it (by pressing enter or blurring the input), it should create the file/folder with that name.
 - [ ] rename button => appears on hover of a folder / file
 - [ ] editor-header isn't useful, remove it
 - [ ] use monaspace font

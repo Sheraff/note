@@ -4,9 +4,7 @@ import { EditorPane } from './app/EditorPane.tsx'
 import { NotesSidebar } from './app/NotesSidebar.tsx'
 import {
   createFolder,
-  createFolderInDirectory,
   createNote,
-  createNoteInDirectory,
   deleteEntry,
   loadNote,
   refreshWorkspace,
@@ -62,6 +60,7 @@ function App() {
 
   const noteContext: NoteContext = {
     storage,
+    entries,
     currentPath,
     setCurrentPath,
     draftContent,
@@ -145,20 +144,24 @@ function App() {
     })
   }
 
-  function handleCreateNote() {
-    void flushPendingSave().then(() => createNote(noteContext)).catch(reportError)
+  async function handleCreateNote(parentPath: string | null, name: string): Promise<string | null> {
+    try {
+      await flushPendingSave()
+      return await createNote(noteContext, parentPath, name)
+    } catch (error) {
+      reportError(error)
+      return getErrorMessage(error)
+    }
   }
 
-  function handleCreateNoteInDirectory(path: string) {
-    void flushPendingSave().then(() => createNoteInDirectory(noteContext, path)).catch(reportError)
-  }
-
-  function handleCreateFolder() {
-    void flushPendingSave().then(() => createFolder(noteContext)).catch(reportError)
-  }
-
-  function handleCreateFolderInDirectory(path: string) {
-    void flushPendingSave().then(() => createFolderInDirectory(noteContext, path)).catch(reportError)
+  async function handleCreateFolder(parentPath: string | null, name: string): Promise<string | null> {
+    try {
+      await flushPendingSave()
+      return await createFolder(noteContext, parentPath, name)
+    } catch (error) {
+      reportError(error)
+      return getErrorMessage(error)
+    }
   }
 
   function handleDeleteEntry(path: string, kind: ListedEntry['kind']) {
@@ -218,9 +221,7 @@ function App() {
           fileCount={fileCount()}
           nodes={tree()}
           onCreateFolder={handleCreateFolder}
-          onCreateFolderInDirectory={handleCreateFolderInDirectory}
           onCreateNote={handleCreateNote}
-          onCreateNoteInDirectory={handleCreateNoteInDirectory}
           onDeleteEntry={handleDeleteEntry}
           onOpen={handleOpenNote}
         />
