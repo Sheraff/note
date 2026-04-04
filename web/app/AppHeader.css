@@ -29,6 +29,63 @@
   }
 }
 
+.storage-menu {
+  min-width: 0;
+}
+
+.storage-menu-trigger {
+  anchor-name: --storage-menu-anchor;
+  max-width: min(24rem, calc(100vw - 3rem));
+}
+
+.storage-menu-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storage-menu-trigger > svg:last-child {
+  opacity: 0.7;
+}
+
+.storage-menu-popover {
+  position: fixed;
+  position-anchor: --storage-menu-anchor;
+  top: calc(anchor(bottom) + 0.45rem);
+  left: anchor(left);
+  margin: 0;
+  min-width: 12rem;
+  max-width: min(18rem, calc(100vw - 2rem));
+  padding: 0.4rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 14px;
+  background: rgba(9, 14, 24, 0.96);
+  box-shadow: 0 18px 48px rgba(2, 6, 23, 0.42);
+
+  &::backdrop {
+    background: transparent;
+  }
+
+  > button {
+    width: 100%;
+    border: none;
+    border-radius: 10px;
+    padding: 0.65rem 0.75rem;
+    justify-content: flex-start;
+    background: transparent;
+
+    &:hover {
+      background: rgba(59, 130, 246, 0.16);
+      border-color: transparent;
+    }
+
+    &:disabled {
+      background: transparent;
+    }
+  }
+}
+
 .pill {
   display: inline-flex;
   align-items: center;
@@ -64,5 +121,13 @@
 
   .actions {
     justify-content: flex-start;
+  }
+
+  .storage-menu-trigger {
+    max-width: calc(100vw - 3rem);
+  }
+
+  .storage-menu-popover {
+    max-width: calc(100vw - 2rem);
   }
 }

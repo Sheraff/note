@@ -15,6 +15,8 @@ export function AppHeader(props: {
   onSync(): void
   onSwitchToOpfs(): void
 }) {
+  const storagePopoverId = 'storage-menu'
+
   return (
     <header class="topbar">
       <div>
@@ -22,10 +24,34 @@ export function AppHeader(props: {
         <p>{props.statusMessage}</p>
       </div>
       <div class="actions">
-        <span class="pill">
-          <Codicon name="database" />
-          Storage: {props.storageLabel}
-        </span>
+        <div class="storage-menu">
+          <button type="button" class="storage-menu-trigger" popovertarget={storagePopoverId}>
+            <Codicon name="database" />
+            <span class="storage-menu-label">Storage: {props.storageLabel}</span>
+            <Codicon name="chevron-down" />
+          </button>
+          <div id={storagePopoverId} class="storage-menu-popover" popover="auto">
+            <button
+              type="button"
+              popovertarget={storagePopoverId}
+              popovertargetaction="hide"
+              onClick={props.onAttachFolder}
+            >
+              <Codicon name="folder-library" />
+              Attach folder
+            </button>
+            <button
+              type="button"
+              disabled={props.isOpfsActive}
+              popovertarget={storagePopoverId}
+              popovertargetaction="hide"
+              onClick={props.onSwitchToOpfs}
+            >
+              <Codicon name="database" />
+              Use OPFS
+            </button>
+          </div>
+        </div>
         <span class="pill">
           <Codicon name="history" />
           {props.syncLabel}
@@ -41,14 +67,6 @@ export function AppHeader(props: {
         <button type="button" onClick={props.onDeleteNote} disabled={!props.canDelete}>
           <Codicon name="trash" />
           Delete note
-        </button>
-        <button type="button" onClick={props.onAttachFolder}>
-          <Codicon name="folder-library" />
-          Attach folder
-        </button>
-        <button type="button" onClick={props.onSwitchToOpfs} disabled={props.isOpfsActive}>
-          <Codicon name="database" />
-          Use OPFS
         </button>
         <button type="button" onClick={props.onSync} disabled={props.isSyncing} aria-busy={props.isSyncing}>
           <Codicon name="refresh" />
