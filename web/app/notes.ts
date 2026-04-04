@@ -1,4 +1,4 @@
-import { ensureMarkdownExtension, getParentPath, normalizeNotePath } from '../notes/paths.ts'
+import { ensureMarkdownExtension, getParentPath, joinNotePath, normalizeNotePath } from '../notes/paths.ts'
 import type { AppSettings } from '../schemas.ts'
 import type { ListedEntry, NoteStorage } from '../storage/types.ts'
 
@@ -89,14 +89,18 @@ export async function saveCurrentNote(context: NoteContext): Promise<void> {
 }
 
 export async function createNote(context: NoteContext) {
+  return createNoteInDirectory(context)
+}
+
+export async function createNoteInDirectory(context: NoteContext, directoryPath?: string | null) {
   const currentStorage = context.storage()
 
   if (currentStorage === null) {
     return
   }
 
-  const defaultDirectory = getParentPath(context.currentPath() ?? '')
-  const defaultPath = defaultDirectory === null ? 'untitled.md' : `${defaultDirectory}/untitled.md`
+  const defaultDirectory = directoryPath === undefined ? getParentPath(context.currentPath() ?? '') : directoryPath
+  const defaultPath = joinNotePath(defaultDirectory, 'untitled.md')
   const value = window.prompt('New note path', defaultPath)
 
   if (value === null) {
@@ -117,14 +121,19 @@ export async function createNote(context: NoteContext) {
 }
 
 export async function createFolder(context: NoteContext) {
+  return createFolderInDirectory(context)
+}
+
+export async function createFolderInDirectory(context: NoteContext, directoryPath?: string | null) {
   const currentStorage = context.storage()
 
   if (currentStorage === null) {
     return
   }
 
-  const defaultDirectory = getParentPath(context.currentPath() ?? '') ?? 'notes'
-  const value = window.prompt('New folder path', defaultDirectory)
+  const defaultPath =
+    directoryPath === undefined ? (getParentPath(context.currentPath() ?? '') ?? 'notes') : joinNotePath(directoryPath, 'untitled')
+  const value = window.prompt('New folder path', defaultPath)
 
   if (value === null) {
     return
@@ -143,20 +152,22 @@ export async function createFolder(context: NoteContext) {
   await refreshWorkspace(context, context.currentPath())
 }
 
-export async function deleteCurrentNote(context: NoteContext) {
+export async function deleteEntry(context: NoteContext, entry: ListedEntry | null) {
   const currentStorage = context.storage()
-  const path = context.currentPath()
 
-  if (currentStorage === null || path === null) {
+  if (currentStorage === null || entry === null) {
     return
   }
 
-  if (!window.confirm(`Delete ${path}?`)) {
+  const message =
+    entry.kind === 'directory' ? `Delete folder ${entry.path} and all its contents?` : `Delete ${entry.path}?`
+
+  if (!window.confirm(message)) {
     return
   }
 
   context.setErrorMessage(null)
-  await currentStorage.deleteEntry(path)
-  context.setStatusMessage(`Deleted ${path}`)
-  await refreshWorkspace(context, null)
+  await currentStorage.deleteEntry(entry.path)
+  context.setStatusMessage(entry.kind === 'directory' ? `Deleted folder ${entry.path}` : `Deleted ${entry.path}`)
+  await refreshWorkspace(context, context.currentPath())
 }

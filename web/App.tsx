@@ -4,8 +4,10 @@ import { EditorPane } from './app/EditorPane.tsx'
 import { NotesSidebar } from './app/NotesSidebar.tsx'
 import {
   createFolder,
+  createFolderInDirectory,
   createNote,
-  deleteCurrentNote,
+  createNoteInDirectory,
+  deleteEntry,
   loadNote,
   refreshWorkspace,
   saveCurrentNote,
@@ -144,15 +146,23 @@ function App() {
   }
 
   function handleCreateNote() {
-    void createNote(noteContext).catch(reportError)
+    void flushPendingSave().then(() => createNote(noteContext)).catch(reportError)
+  }
+
+  function handleCreateNoteInDirectory(path: string) {
+    void flushPendingSave().then(() => createNoteInDirectory(noteContext, path)).catch(reportError)
   }
 
   function handleCreateFolder() {
-    void createFolder(noteContext).catch(reportError)
+    void flushPendingSave().then(() => createFolder(noteContext)).catch(reportError)
   }
 
-  function handleDeleteNote() {
-    void deleteCurrentNote(noteContext).catch(reportError)
+  function handleCreateFolderInDirectory(path: string) {
+    void flushPendingSave().then(() => createFolderInDirectory(noteContext, path)).catch(reportError)
+  }
+
+  function handleDeleteEntry(path: string, kind: ListedEntry['kind']) {
+    void flushPendingSave().then(() => deleteEntry(noteContext, { path, kind })).catch(reportError)
   }
 
   function handleAttachFolder() {
@@ -190,16 +200,12 @@ function App() {
   return (
     <div class="app">
       <AppHeader
-        canDelete={currentPath() !== null}
         isOpfsActive={isOpfsActive()}
         isSyncing={isSyncing()}
         lastSyncedAt={syncState().lastSyncedAt}
         statusMessage={statusMessage()}
         storageLabel={storageLabel()}
         onAttachFolder={handleAttachFolder}
-        onCreateFolder={handleCreateFolder}
-        onCreateNote={handleCreateNote}
-        onDeleteNote={handleDeleteNote}
         onSync={handleSync}
         onSwitchToOpfs={handleSwitchToOpfs}
       />
@@ -211,6 +217,11 @@ function App() {
           currentPath={currentPath()}
           fileCount={fileCount()}
           nodes={tree()}
+          onCreateFolder={handleCreateFolder}
+          onCreateFolderInDirectory={handleCreateFolderInDirectory}
+          onCreateNote={handleCreateNote}
+          onCreateNoteInDirectory={handleCreateNoteInDirectory}
+          onDeleteEntry={handleDeleteEntry}
           onOpen={handleOpenNote}
         />
         <EditorPane

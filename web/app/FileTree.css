@@ -3,48 +3,85 @@
   margin: 0;
   padding-left: 0;
 
-  ul {
-    list-style: none;
-    margin: 0;
-    padding-left: 0.85rem;
-  }
-
   li {
     margin: 0.15rem 0;
-  }
 
-  summary {
-    cursor: default;
-    color: #cbd5e1;
+    > .tree-row {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      min-width: 0;
 
-    > svg {
-      width: 1rem;
-      height: 1rem;
-      margin-right: 0.5rem;
-      vertical-align: text-bottom;
-      fill: currentColor;
+      > button:first-child {
+        flex: 1 1 auto;
+        min-width: 0;
+        text-align: left;
+        border: none;
+        background: transparent;
+        padding: 0.35rem 0.5rem;
+        border-radius: 8px;
+        justify-content: flex-start;
+        color: #cbd5e1;
+
+        > span {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+      }
+
+      > button[aria-current='true'],
+      &:hover > button:first-child,
+      &:focus-within > button:first-child {
+        background: rgba(59, 130, 246, 0.16);
+      }
+
+      > .tree-actions {
+        display: flex;
+        flex: none;
+        gap: 0.2rem;
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+
+        > button {
+          padding: 0.35rem;
+          border-color: transparent;
+          background: transparent;
+
+          &:last-child {
+            color: #fca5a5;
+          }
+        }
+      }
+
+      &:hover > .tree-actions,
+      &:focus-within > .tree-actions {
+        opacity: 1;
+        visibility: visible;
+        pointer-events: auto;
+      }
+    }
+
+    > .tree {
+      list-style: none;
+      margin: 0;
+      padding-left: 0.95rem;
     }
   }
+}
 
-  button {
-    width: 100%;
-    text-align: left;
-    border: none;
-    background: transparent;
-    padding: 0.35rem 0.5rem;
-    border-radius: 8px;
-    justify-content: flex-start;
-
-    > svg {
-      width: 1rem;
-      height: 1rem;
-      flex: none;
-      fill: currentColor;
-    }
-
-    &[aria-current='true'],
-    &:hover {
-      background: rgba(59, 130, 246, 0.16);
+@media (hover: none) {
+  .tree {
+    li {
+      > .tree-row {
+        > .tree-actions {
+          opacity: 1;
+          visibility: visible;
+          pointer-events: auto;
+        }
+      }
     }
   }
 }

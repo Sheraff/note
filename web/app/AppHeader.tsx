@@ -56,16 +56,12 @@ function formatAbsoluteSyncTime(timestamp: string): string | null {
 }
 
 export function AppHeader(props: {
-  canDelete: boolean
   isSyncing: boolean
   isOpfsActive: boolean
   lastSyncedAt: string | null
   statusMessage: string
   storageLabel: string
   onAttachFolder(): void
-  onCreateFolder(): void
-  onCreateNote(): void
-  onDeleteNote(): void
   onSync(): void
   onSwitchToOpfs(): void
 }) {
@@ -150,18 +146,6 @@ export function AppHeader(props: {
         >
           <Codicon name="refresh" />
           <span>{syncLabel()}</span>
-        </button>
-        <button type="button" onClick={props.onCreateNote}>
-          <Codicon name="new-file" />
-          New note
-        </button>
-        <button type="button" onClick={props.onCreateFolder}>
-          <Codicon name="new-folder" />
-          New folder
-        </button>
-        <button type="button" onClick={props.onDeleteNote} disabled={!props.canDelete}>
-          <Codicon name="trash" />
-          Delete note
         </button>
       </div>
     </header>
