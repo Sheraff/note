@@ -49,6 +49,17 @@
   opacity: 0.7;
 }
 
+.sync-button {
+  max-width: min(20rem, calc(100vw - 3rem));
+
+  > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
 .storage-menu-popover {
   position: fixed;
   position-anchor: --storage-menu-anchor;
@@ -86,24 +97,6 @@
   }
 }
 
-.pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 999px;
-  padding: 0.55rem 0.9rem;
-  color: #cbd5e1;
-  background: rgba(15, 23, 42, 0.55);
-
-  > svg {
-    width: 1rem;
-    height: 1rem;
-    flex: none;
-    fill: currentColor;
-  }
-}
-
 @keyframes spin {
   from {
     transform: rotate(0deg);
@@ -124,6 +117,10 @@
   }
 
   .storage-menu-trigger {
+    max-width: calc(100vw - 3rem);
+  }
+
+  .sync-button {
     max-width: calc(100vw - 3rem);
   }
 

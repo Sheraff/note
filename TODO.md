@@ -1,7 +1,7 @@
 - [x] use Codicons for app icons
 - [x] "Storage: <folder name>" + attach folder + use opfs => should all combine in a single button
-- [ ] "last sync <date>" + sync button => should combine in a single button
-- [ ] date should display as human readable using `Intl.RelativeTimeFormat`
+- [x] "last sync <date>" + sync button => should combine in a single button
+- [x] date should display as human readable using `Intl.RelativeTimeFormat`
 - [ ] new note / new folder / delete note => should all be buttons in the sidebar. (delete => appears when hovering folder or file, new note / new folder => appears on hover of a folder, and in the header)
 - [ ] rename button => appears on hover of a folder / file
 - [ ] editor-header isn't useful, remove it

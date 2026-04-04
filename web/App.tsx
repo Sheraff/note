@@ -47,10 +47,6 @@ function App() {
   const tree = createMemo(() => buildTree(entries()))
   const fileCount = createMemo(() => entries().filter((entry) => entry.kind === 'file').length)
   const storageLabel = createMemo(() => storage()?.label ?? 'Loading...')
-  const lastSyncLabel = createMemo(() => {
-    const lastSyncedAt = syncState().lastSyncedAt
-    return lastSyncedAt === null ? 'Not synced yet' : `Last sync ${lastSyncedAt}`
-  })
   const isOpfsActive = createMemo(() => settings().backend === 'opfs')
 
   function reportError(error: unknown) {
@@ -197,9 +193,9 @@ function App() {
         canDelete={currentPath() !== null}
         isOpfsActive={isOpfsActive()}
         isSyncing={isSyncing()}
+        lastSyncedAt={syncState().lastSyncedAt}
         statusMessage={statusMessage()}
         storageLabel={storageLabel()}
-        syncLabel={lastSyncLabel()}
         onAttachFolder={handleAttachFolder}
         onCreateFolder={handleCreateFolder}
         onCreateNote={handleCreateNote}
