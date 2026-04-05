@@ -15,7 +15,7 @@
   inset: 0;
 }
 
-.empty {
+.editor-empty {
   position: absolute;
   inset: 0;
   display: grid;
@@ -24,4 +24,58 @@
   color: #94a3b8;
   background: rgba(13, 17, 23, 0.76);
   backdrop-filter: blur(4px);
+
+  > p {
+    margin: 0;
+    font-size: 1rem;
+    text-align: center;
+  }
+}
+
+.editor-empty-panel {
+  display: grid;
+  gap: 0.85rem;
+  width: min(32rem, 100%);
+  padding: 1.25rem;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 18px;
+  background: rgba(7, 10, 17, 0.78);
+  box-shadow: 0 18px 48px rgba(2, 6, 23, 0.22);
+
+  > h2,
+  > p {
+    margin: 0;
+    text-align: center;
+  }
+
+  > h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #e6edf3;
+  }
+}
+
+.editor-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.6rem;
+
+  > button {
+    justify-content: center;
+  }
+}
+
+@media (max-width: 720px) {
+  .editor-empty-panel {
+    width: 100%;
+  }
+
+  .editor-empty-actions {
+    flex-direction: column;
+
+    > button {
+      width: 100%;
+    }
+  }
 }

@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onCleanup, onMount } from 'solid-js'
+import { Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import './StatusBar.css'
 import { Codicon } from './Codicon.tsx'
 
@@ -56,12 +56,16 @@ function formatAbsoluteSyncTime(timestamp: string): string | null {
 }
 
 export function StatusBar(props: {
+  canReconnectFolder: boolean
+  canSync: boolean
   errorMessage: string | null
   isSyncing: boolean
   isOpfsActive: boolean
   lastSyncedAt: string | null
+  reconnectLabel: string | null
   storageLabel: string
   onAttachFolder(): void
+  onReconnectFolder(): void
   onSync(): void
   onSwitchToOpfs(): void
 }) {
@@ -113,6 +117,17 @@ export function StatusBar(props: {
             <span>{props.storageLabel}</span>
           </button>
           <div id={storagePopoverId} class="statusbar-storage-popover" popover="auto">
+            <Show when={props.canReconnectFolder && props.reconnectLabel !== null}>
+              <button
+                type="button"
+                popovertarget={storagePopoverId}
+                popovertargetaction="hide"
+                onClick={props.onReconnectFolder}
+              >
+                <Codicon name="plug" />
+                <span>{`Reconnect ${props.reconnectLabel}`}</span>
+              </button>
+            </Show>
             <button
               type="button"
               popovertarget={storagePopoverId}
@@ -120,7 +135,7 @@ export function StatusBar(props: {
               onClick={props.onAttachFolder}
             >
               <Codicon name="folder-library" />
-              Attach folder
+              <span>{props.canReconnectFolder ? 'Pick another folder' : 'Attach folder'}</span>
             </button>
             <button
               type="button"
@@ -138,7 +153,7 @@ export function StatusBar(props: {
           type="button"
           class="statusbar-button"
           onClick={props.onSync}
-          disabled={props.isSyncing}
+          disabled={!props.canSync || props.isSyncing}
           aria-busy={props.isSyncing}
           title={syncTitle()}
         >

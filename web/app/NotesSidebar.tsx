@@ -6,7 +6,9 @@ import './NotesSidebar.css'
 
 export function NotesSidebar(props: {
   currentPath: string | null
+  emptyMessage: string
   fileCount: number
+  isReady: boolean
   nodes: TreeNode[]
   onCreateFolder(parentPath: string | null, name: string): Promise<string | null>
   onCreateNote(parentPath: string | null, name: string): Promise<string | null>
@@ -67,6 +69,7 @@ export function NotesSidebar(props: {
           <button
             type="button"
             aria-label="New note"
+            disabled={!props.isReady}
             title="New note"
             onClick={() => {
               startCreation('file', null)
@@ -77,6 +80,7 @@ export function NotesSidebar(props: {
           <button
             type="button"
             aria-label="New folder"
+            disabled={!props.isReady}
             title="New folder"
             onClick={() => {
               startCreation('directory', null)
@@ -86,7 +90,7 @@ export function NotesSidebar(props: {
           </button>
         </div>
       </header>
-      <Show when={props.nodes.length > 0 || pendingCreation()?.parentPath === null} fallback={<p>Create a note to start writing.</p>}>
+      <Show when={props.nodes.length > 0 || pendingCreation()?.parentPath === null} fallback={<p>{props.emptyMessage}</p>}>
         <FileTree
           currentPath={props.currentPath}
           parentPath={null}

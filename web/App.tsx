@@ -12,7 +12,7 @@ import {
   saveCurrentNote,
   type NoteContext,
 } from './app/notes.ts'
-import { attachFolder, bootstrapWorkspace, switchToOpfs, type StorageContext } from './app/storage.ts'
+import { attachFolder, bootstrapWorkspace, reconnectFolder, switchToOpfs, type StorageContext } from './app/storage.ts'
 import { createSyncRequester, syncNow, type SyncContext } from './app/sync.ts'
 import type { MonacoController } from './editor/monaco.ts'
 import { buildTree } from './notes/tree.ts'
@@ -36,7 +36,9 @@ function App() {
 
   const [sidebarWidth, setSidebarWidth] = createSignal(300)
 
+  const [hasBootstrapped, setHasBootstrapped] = createSignal(false)
   const [storage, setStorage] = createSignal<NoteStorage | null>(null)
+  const [reconnectableDirectoryName, setReconnectableDirectoryName] = createSignal<string | null>(null)
   const [settings, setSettings] = createSignal<AppSettings>(DEFAULT_APP_SETTINGS)
   const [entries, setEntries] = createSignal<ListedEntry[]>([])
   const [currentPath, setCurrentPath] = createSignal<string | null>(null)
@@ -47,7 +49,34 @@ function App() {
 
   const tree = createMemo(() => buildTree(entries()))
   const fileCount = createMemo(() => entries().filter((entry) => entry.kind === 'file').length)
-  const storageLabel = createMemo(() => storage()?.label ?? 'Loading...')
+  const storageLabel = createMemo(() => {
+    const currentStorage = storage()
+
+    if (currentStorage !== null) {
+      return currentStorage.label
+    }
+
+    const directoryName = reconnectableDirectoryName()
+
+    if (directoryName !== null) {
+      return `Reconnect ${directoryName}`
+    }
+
+    return hasBootstrapped() ? 'Attach folder' : 'Loading...'
+  })
+  const emptyMessage = createMemo(() => {
+    const directoryName = reconnectableDirectoryName()
+
+    if (directoryName !== null) {
+      return `Reconnect ${directoryName} to reopen your notes.`
+    }
+
+    if (storage() === null && hasBootstrapped()) {
+      return 'Attach a folder to reopen your notes.'
+    }
+
+    return 'Create a note to start writing.'
+  })
   const isOpfsActive = createMemo(() => settings().backend === 'opfs')
 
   function reportError(error: unknown) {
@@ -81,6 +110,7 @@ function App() {
     saveSettings,
     setStorage,
     setSyncState: setSyncStateSignal,
+    setReconnectableDirectoryName,
     setErrorMessage,
     refreshWorkspace(preferredPath) {
       return refreshWorkspace(noteContext, preferredPath)
@@ -228,6 +258,10 @@ function App() {
     void attachFolder(storageContext).catch(reportError)
   }
 
+  function handleReconnectFolder() {
+    void reconnectFolder(storageContext).catch(reportError)
+  }
+
   function handleSwitchToOpfs() {
     void switchToOpfs(storageContext).catch(reportError)
   }
@@ -272,7 +306,11 @@ function App() {
 
   onMount(() => {
     void mountEditor().catch(reportError)
-    void bootstrapWorkspace(storageContext).catch(reportError)
+    void bootstrapWorkspace(storageContext)
+      .catch(reportError)
+      .finally(() => {
+        setHasBootstrapped(true)
+      })
   })
 
   onCleanup(() => {
@@ -286,7 +324,9 @@ function App() {
       <main class="workspace" style={{ 'grid-template-columns': `${sidebarWidth()}px 0px 1fr` } as JSX.CSSProperties}>
         <NotesSidebar
           currentPath={currentPath()}
+          emptyMessage={emptyMessage()}
           fileCount={fileCount()}
+          isReady={storage() !== null}
           nodes={tree()}
           onCreateFolder={handleCreateFolder}
           onCreateNote={handleCreateNote}
@@ -297,18 +337,26 @@ function App() {
         <div class="resize-handle" onMouseDown={handleResizeStart} />
         <EditorPane
           currentPath={currentPath()}
+          reconnectableDirectoryName={reconnectableDirectoryName()}
+          onAttachFolder={handleAttachFolder}
           onEditorMount={(element) => {
             editorElement = element
           }}
+          onReconnectFolder={handleReconnectFolder}
+          onSwitchToOpfs={handleSwitchToOpfs}
         />
       </main>
       <StatusBar
         errorMessage={errorMessage()}
+        canReconnectFolder={reconnectableDirectoryName() !== null}
+        canSync={storage() !== null}
         isOpfsActive={isOpfsActive()}
         isSyncing={isSyncing()}
         lastSyncedAt={syncState().lastSyncedAt}
+        reconnectLabel={reconnectableDirectoryName()}
         storageLabel={storageLabel()}
         onAttachFolder={handleAttachFolder}
+        onReconnectFolder={handleReconnectFolder}
         onSync={handleSync}
         onSwitchToOpfs={handleSwitchToOpfs}
       />

@@ -208,8 +208,12 @@ export async function pickDirectoryHandle(): Promise<FileSystemDirectoryHandle> 
   return window.showDirectoryPicker({ mode: 'readwrite' })
 }
 
-export async function hasDirectoryPermission(handle: FileSystemDirectoryHandle): Promise<boolean> {
-  const readWritePermission = await handle.queryPermission({ mode: 'readwrite' })
+export async function queryDirectoryPermission(handle: FileSystemDirectoryHandle): Promise<PermissionState> {
+  return handle.queryPermission({ mode: 'readwrite' })
+}
+
+export async function requestDirectoryPermission(handle: FileSystemDirectoryHandle): Promise<boolean> {
+  const readWritePermission = await queryDirectoryPermission(handle)
 
   if (readWritePermission === 'granted') {
     return true
