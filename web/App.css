@@ -7,8 +7,20 @@
 
 .workspace {
   display: grid;
-  grid-template-columns: 300px 1fr;
   min-height: 0;
+}
+
+.resize-handle {
+  width: 4px;
+  margin: 0 -2px;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+
+  &:hover,
+  &:active {
+    background: rgba(59, 130, 246, 0.5);
+  }
 }
 
 @media (max-width: 960px) {

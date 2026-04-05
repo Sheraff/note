@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onCleanup, onMount } from 'solid-js'
+import { createMemo, createSignal, onCleanup, onMount, type JSX } from 'solid-js'
 import { EditorPane } from './app/EditorPane.tsx'
 import { NotesSidebar } from './app/NotesSidebar.tsx'
 import { StatusBar } from './app/StatusBar.tsx'
@@ -32,6 +32,8 @@ function App() {
   let editorElement: HTMLDivElement | undefined
   let editor: MonacoController | undefined
   let saveTimeout: number | undefined
+
+  const [sidebarWidth, setSidebarWidth] = createSignal(300)
 
   const [storage, setStorage] = createSignal<NoteStorage | null>(null)
   const [settings, setSettings] = createSignal<AppSettings>(DEFAULT_APP_SETTINGS)
@@ -174,6 +176,29 @@ function App() {
     void syncNow(syncContext).catch(reportError)
   }
 
+  function handleResizeStart(event: MouseEvent) {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = sidebarWidth()
+
+    function onMouseMove(event: MouseEvent) {
+      const width = Math.max(150, Math.min(startWidth + event.clientX - startX, 600))
+      setSidebarWidth(width)
+    }
+
+    function onMouseUp() {
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }
+
   function handleOpenNote(path: string) {
     void flushPendingSave().then(() => loadNote(noteContext, path)).catch(reportError)
   }
@@ -193,7 +218,7 @@ function App() {
 
   return (
     <div class="app">
-      <main class="workspace">
+      <main class="workspace" style={{ 'grid-template-columns': `${sidebarWidth()}px 0px 1fr` } as JSX.CSSProperties}>
         <NotesSidebar
           currentPath={currentPath()}
           fileCount={fileCount()}
@@ -203,6 +228,7 @@ function App() {
           onDeleteEntry={handleDeleteEntry}
           onOpen={handleOpenNote}
         />
+        <div class="resize-handle" onMouseDown={handleResizeStart} />
         <EditorPane
           currentPath={currentPath()}
           onEditorMount={(element) => {
