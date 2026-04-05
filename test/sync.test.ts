@@ -25,6 +25,7 @@ async function skipPendingSave(): Promise<FlushPendingSaveResult> {
 }
 
 function createSyncContext(options: {
+  blockedSyncPaths?: string[]
   currentPath?: string | null
   flushPendingSave?: () => Promise<FlushPendingSaveResult>
   hasKnownLocalChangesSinceSync?: boolean
@@ -32,9 +33,11 @@ function createSyncContext(options: {
   syncState: SyncState
 }) {
   return {
+    blockedSyncPaths: () => options.blockedSyncPaths ?? [],
     storage: () => options.storage,
     syncState: () => options.syncState,
     currentPath: () => options.currentPath ?? null,
+    setQueuedNoteConflicts: vi.fn(),
     setSyncState: vi.fn(),
     setIsSyncing: vi.fn(),
     hasKnownLocalChangesSinceSync: () => options.hasKnownLocalChangesSinceSync ?? false,
@@ -434,5 +437,51 @@ describe('client sync helpers', () => {
       loadedSnapshot: mineFile,
       source: 'remote',
     })
+  })
+
+  it('skips blocked conflict paths during a follow-up sync', async () => {
+    const remoteFirst = await createRemoteFile('notes/first.md', 'cloud first', '2026-04-03T10:00:00.000Z')
+    const remoteSecond = await createRemoteFile('notes/second.md', 'cloud second', '2026-04-03T10:00:00.000Z')
+    const localFirst = await createStoredFile('notes/first.md', 'local first', '2026-04-03T11:00:00.000Z')
+    const localSecond = await createStoredFile('notes/second.md', 'local second', '2026-04-03T11:00:00.000Z')
+    const storage = createMemoryStorage([localFirst, localSecond])
+    const syncState: SyncState = {
+      files: [remoteFirst, remoteSecond],
+      lastSyncedAt: null,
+    }
+    const context = createSyncContext({
+      blockedSyncPaths: ['notes/second.md'],
+      currentPath: 'notes/first.md',
+      storage,
+      syncState,
+    })
+    const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
+      expect(input).toBe('/api/sync/push')
+
+      const body = JSON.parse(init?.body as string) as { changes: Array<{ path: string }> }
+
+      expect(body.changes.map((change) => change.path)).toEqual(['notes/first.md'])
+
+      return createJsonResponse({
+        files: [
+          {
+            ...remoteFirst,
+            content: 'local first',
+            contentHash: await hashContent('local first'),
+            updatedAt: '2026-04-03T11:00:00.000Z',
+          },
+          remoteSecond,
+        ],
+        conflicts: [],
+      })
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    await syncNow(context, { mode: 'full', skipPendingSave: true })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(context.setHasKnownLocalChangesSinceSync).toHaveBeenCalledWith(true)
+    expect(context.setQueuedNoteConflicts).not.toHaveBeenCalledWith([])
   })
 })

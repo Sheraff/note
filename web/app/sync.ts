@@ -21,9 +21,11 @@ export type FlushPendingSaveOptions = {
 export type FlushPendingSaveResult = SaveCurrentNoteResult | { status: 'skipped' }
 
 export type SyncContext = {
+  blockedSyncPaths(): string[]
   storage(): NoteStorage | null
   syncState(): SyncState
   currentPath(): string | null
+  setQueuedNoteConflicts(conflicts: NoteConflict[]): void
   setSyncState(syncState: SyncState): void
   setIsSyncing(value: boolean): void
   hasKnownLocalChangesSinceSync(): boolean
@@ -58,12 +60,23 @@ function createSyncNoteConflict(path: string, mineFile: StoredFile | null, their
   }
 }
 
+async function writeConflictSourceVersion(storage: NoteStorage, conflict: NoteConflict): Promise<void> {
+  if (conflict.diskFile !== null) {
+    await storage.writeTextFile(conflict.path, conflict.diskFile.content)
+    return
+  }
+
+  await storage.deleteEntry(conflict.path)
+}
+
 async function runFullSync(context: SyncContext, storage: NoteStorage): Promise<{
   syncState: SyncState
   conflict: NoteConflict | null
 }> {
+  const blockedPaths = new Set(context.blockedSyncPaths())
   const result = await syncWithServer({
     api,
+    blockedPaths,
     previousState: context.syncState(),
     storage,
   })
@@ -75,10 +88,19 @@ async function runFullSync(context: SyncContext, storage: NoteStorage): Promise<
   if (firstConflict !== null) {
     await context.refreshWorkspace(firstConflict.path)
 
-    const mineFile = await storage.readTextFile(firstConflict.path)
+    const noteConflicts: NoteConflict[] = []
 
-    noteConflict = createSyncNoteConflict(firstConflict.path, mineFile, firstConflict.theirsFile)
+    for (const conflict of result.conflicts) {
+      noteConflicts.push(createSyncNoteConflict(conflict.path, await storage.readTextFile(conflict.path), conflict.theirsFile))
+    }
+
+    for (const queuedConflict of noteConflicts.slice(1)) {
+      await writeConflictSourceVersion(storage, queuedConflict)
+    }
+
+    noteConflict = noteConflicts[0] ?? null
     context.setNoteConflict(noteConflict)
+    context.setQueuedNoteConflicts(noteConflicts.slice(1))
     context.setHasKnownLocalChangesSinceSync(true)
 
     if (result.conflicts.length > 1) {
@@ -91,8 +113,14 @@ async function runFullSync(context: SyncContext, storage: NoteStorage): Promise<
     }
   }
 
-  context.setNoteConflict(null)
-  context.setHasKnownLocalChangesSinceSync(false)
+  if (blockedPaths.size === 0) {
+    context.setQueuedNoteConflicts([])
+    context.setNoteConflict(null)
+    context.setHasKnownLocalChangesSinceSync(false)
+  } else {
+    context.setHasKnownLocalChangesSinceSync(true)
+  }
+
   await context.refreshWorkspace(context.currentPath())
 
   return {

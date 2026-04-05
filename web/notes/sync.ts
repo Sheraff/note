@@ -25,12 +25,17 @@ export function buildLocalChanges(
   previousRemoteFiles: RemoteFile[],
   localFiles: StoredFile[],
   now: string,
+  skippedPaths: ReadonlySet<string> = new Set(),
 ): SyncChange[] {
   const previousByPath = new Map(previousRemoteFiles.map((file) => [file.path, file]))
   const localByPath = new Map(localFiles.map((file) => [file.path, file]))
   const changes: SyncChange[] = []
 
   for (const file of localFiles) {
+    if (skippedPaths.has(file.path)) {
+      continue
+    }
+
     const previous = previousByPath.get(file.path)
 
     if (previous?.deletedAt === null && previous.contentHash === file.contentHash) {
@@ -47,7 +52,7 @@ export function buildLocalChanges(
   }
 
   for (const previous of previousRemoteFiles) {
-    if (previous.deletedAt !== null || localByPath.has(previous.path)) {
+    if (previous.deletedAt !== null || skippedPaths.has(previous.path) || localByPath.has(previous.path)) {
       continue
     }
 
@@ -139,6 +144,7 @@ export function doesManifestMatchSyncState(manifestFiles: ManifestEntry[], syncF
 
 export async function syncWithServer(options: {
   api: ReturnType<typeof createApiClient>
+  blockedPaths?: ReadonlySet<string>
   previousState: SyncState
   storage: NoteStorage
 }): Promise<{
@@ -147,7 +153,7 @@ export async function syncWithServer(options: {
 }> {
   const now = new Date().toISOString()
   const localFiles = await options.storage.listFiles()
-  const changes = buildLocalChanges(options.previousState.files, localFiles, now)
+  const changes = buildLocalChanges(options.previousState.files, localFiles, now, options.blockedPaths)
   const response = await options.api.pushChanges({ changes })
   const conflicts = resolveSyncConflicts(response.conflicts)
 

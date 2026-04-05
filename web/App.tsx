@@ -89,6 +89,7 @@ function App() {
   const [isSyncing, setIsSyncing] = createSignal(false)
   const [loadedFileSnapshot, setLoadedFileSnapshot] = createSignal<StoredFile | null>(null)
   const [noteConflictSignal, setNoteConflictSignal] = createSignal<NoteConflict | null>(null)
+  const [queuedNoteConflictsSignal, setQueuedNoteConflictsSignal] = createSignal<NoteConflict[]>([])
   const [isDiffMode, setIsDiffMode] = createSignal(false)
   const [hasUnsyncedWorkspaceChanges, setHasUnsyncedWorkspaceChanges] = createSignal(false)
 
@@ -184,6 +185,25 @@ function App() {
 
   function noteConflict() {
     return noteConflictSignal()
+  }
+
+  function queuedNoteConflicts() {
+    return queuedNoteConflictsSignal()
+  }
+
+  function blockedSyncPaths() {
+    const paths = new Set<string>()
+    const currentConflict = noteConflict()
+
+    if (currentConflict !== null) {
+      paths.add(currentConflict.path)
+    }
+
+    for (const conflict of queuedNoteConflicts()) {
+      paths.add(conflict.path)
+    }
+
+    return [...paths]
   }
 
   function updateNoteConflict(updater: (conflict: NoteConflict) => NoteConflict) {
@@ -348,9 +368,11 @@ function App() {
   }
 
   const syncContext: SyncContext = {
+    blockedSyncPaths,
     storage,
     syncState,
     currentPath,
+    setQueuedNoteConflicts: setQueuedNoteConflictsSignal,
     setSyncState: setSyncStateSignal,
     setIsSyncing,
     hasKnownLocalChangesSinceSync,
@@ -488,6 +510,26 @@ function App() {
     }
   }
 
+  async function promoteNextQueuedConflict() {
+    const [nextConflict, ...remainingConflicts] = queuedNoteConflicts()
+    const currentStorage = storage()
+
+    if (nextConflict === undefined) {
+      return
+    }
+
+    if (currentStorage !== null) {
+      if (nextConflict.loadedSnapshot !== null || nextConflict.draftContent.length > 0) {
+        await currentStorage.writeTextFile(nextConflict.path, nextConflict.draftContent)
+      } else {
+        await currentStorage.deleteEntry(nextConflict.path)
+      }
+    }
+
+    setQueuedNoteConflictsSignal(remainingConflicts)
+    setNoteConflict(nextConflict)
+  }
+
   async function overwriteConflictWithDraft() {
     const currentStorage = storage()
     const conflict = noteConflict()
@@ -503,6 +545,10 @@ function App() {
     await loadNote(noteContext, conflict.path)
     snapshotCurrentOpenNoteForSync()
     await requestSync({ mode: 'full', skipPendingSave: true })
+
+    if (noteConflict() === null) {
+      await promoteNextQueuedConflict()
+    }
   }
 
   async function restoreConflictFromDisk() {
@@ -521,6 +567,7 @@ function App() {
       setNoteConflict(null)
       await loadNote(noteContext, conflict.path)
       snapshotCurrentOpenNoteForSync()
+      await promoteNextQueuedConflict()
       return
     }
 
@@ -528,6 +575,7 @@ function App() {
     setNoteConflict(null)
     await refreshWorkspace(noteContext, null)
     snapshotCurrentOpenNoteForSync()
+    await promoteNextQueuedConflict()
   }
 
   async function saveConflictDraftAsCopy() {
@@ -555,6 +603,10 @@ function App() {
     await refreshWorkspace(noteContext, conflict.diskFile === null ? copyPath : conflict.path)
     snapshotCurrentOpenNoteForSync()
     await requestSync({ mode: 'full', skipPendingSave: true })
+
+    if (noteConflict() === null) {
+      await promoteNextQueuedConflict()
+    }
   }
 
   async function handleOverwriteWithDraft() {
