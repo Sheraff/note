@@ -53,6 +53,17 @@ function isSaveBlockedByConflict(result: PersistResult): boolean {
   return result.status === 'conflict'
 }
 
+function getConflictOriginalLabel(conflict: NoteConflict): string {
+  return conflict.source === 'remote' ? 'Cloud version' : 'File version'
+}
+
+function getConflictSourceActionLabel(conflict: NoteConflict, action: 'accept' | 'save'): string {
+  const prefix = action === 'accept' ? 'Accept' : 'Save'
+  const sourceLabel = conflict.source === 'remote' ? 'cloud' : 'file'
+
+  return conflict.diskFile === null ? `${prefix} ${sourceLabel} deletion` : `${prefix} ${sourceLabel} version`
+}
+
 function App() {
   let editorElement: HTMLDivElement | undefined
   let editor: MonacoController | undefined
@@ -123,6 +134,11 @@ function App() {
     return 'Create a note to start writing.'
   })
   const isOpfsActive = createMemo(() => settings().backend === 'opfs')
+  const diffSourceVersionLabel = createMemo(() => {
+    const conflict = noteConflictSignal()
+
+    return conflict === null ? 'Save source version' : getConflictSourceActionLabel(conflict, 'save')
+  })
   const conflictSummary = createMemo(() => {
     const conflict = noteConflictSignal()
 
@@ -130,14 +146,7 @@ function App() {
       return null
     }
 
-    const acceptTheirs =
-      conflict.source === 'remote'
-        ? conflict.diskFile === null
-          ? 'Accept cloud deletion'
-          : 'Accept cloud version'
-        : conflict.diskFile === null
-          ? 'Accept file deletion'
-          : 'Accept file version'
+    const acceptTheirs = getConflictSourceActionLabel(conflict, 'accept')
 
     const message =
       conflict.source === 'remote'
@@ -237,6 +246,8 @@ function App() {
       editor = monaco.createMonacoDiffEditor(editorElement, {
         originalValue: conflict.diskFile?.content ?? '',
         modifiedValue: draftContent(),
+        originalLabel: getConflictOriginalLabel(conflict),
+        modifiedLabel: 'Current draft',
         onChange(value) {
           setDraftContent(value)
           syncConflictDraft(value)
@@ -541,6 +552,10 @@ function App() {
     await saveConflictDraftAsCopy()
   }
 
+  async function handleSaveSourceVersion() {
+    await restoreConflictFromDisk()
+  }
+
   async function handleCreateNote(parentPath: string | null, name: string): Promise<string | null> {
     try {
       const saveResult = await flushPendingSave()
@@ -823,12 +838,16 @@ function App() {
             editorElement = element
           }}
           onReconnectFolder={handleReconnectFolder}
+          onSaveSourceVersion={() => {
+            void handleSaveSourceVersion().catch(reportError)
+          }}
           onSaveResolvedAsCopy={() => {
             void handleSaveResolvedAsCopy().catch(reportError)
           }}
           onSaveResolvedVersion={() => {
             void handleSaveResolvedVersion().catch(reportError)
           }}
+          saveSourceVersionLabel={diffSourceVersionLabel()}
           onSwitchToOpfs={handleSwitchToOpfs}
         />
       </main>

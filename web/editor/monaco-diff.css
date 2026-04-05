@@ -1,0 +1,75 @@
+.monaco-diff-label-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.monaco-diff-pane-label,
+.monaco-diff-inline-legend {
+  position: absolute;
+  top: 0.7rem;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.monaco-diff-pane-label {
+  overflow: hidden;
+}
+
+.monaco-diff-pane-label[data-align='right'] {
+  justify-content: flex-end;
+}
+
+.monaco-diff-inline-legend {
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 1.5rem);
+}
+
+.monaco-diff-label-badge,
+.monaco-diff-inline-separator {
+  flex: none;
+}
+
+.monaco-diff-label-badge {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  color: #fff;
+  box-shadow: 0 10px 24px rgba(2, 6, 23, 0.18);
+  font-family: 'Monaspace Neon', monospace;
+  font-size: 0.68rem;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.monaco-diff-label-badge[data-variant='original'] {
+  background: rgba(185, 28, 28, 0.92);
+}
+
+.monaco-diff-label-badge[data-variant='modified'] {
+  background: rgba(22, 101, 52, 0.92);
+}
+
+.monaco-diff-inline-separator {
+  color: #64748b;
+  font-family: 'Monaspace Neon', monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.monaco-diff-label-hidden {
+  display: none;
+}
