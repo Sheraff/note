@@ -1,4 +1,4 @@
-import { ensureMarkdownExtension, joinNotePath, normalizeRelativeCreatePath } from '../notes/paths.ts'
+import { ensureMarkdownExtension, getParentPath, joinNotePath, normalizeEntryName, normalizeRelativeCreatePath } from '../notes/paths.ts'
 import type { AppSettings } from '../schemas.ts'
 import type { ListedEntry, NoteStorage } from '../storage/types.ts'
 
@@ -84,9 +84,13 @@ function getCreateErrorMessage(kind: ListedEntry['kind']): string {
   return kind === 'directory' ? 'Enter a valid folder path.' : 'Enter a valid note path.'
 }
 
-function getCreateFailureMessage(kind: ListedEntry['kind'], error: unknown): string {
+function getRenameErrorMessage(kind: ListedEntry['kind']): string {
+  return kind === 'directory' ? 'Enter a valid folder name.' : 'Enter a valid note name.'
+}
+
+function getFailureMessage(message: string, error: unknown): string {
   if (error instanceof Error && error.message.includes('Name is not allowed')) {
-    return getCreateErrorMessage(kind)
+    return message
   }
 
   if (error instanceof Error) {
@@ -96,8 +100,44 @@ function getCreateFailureMessage(kind: ListedEntry['kind'], error: unknown): str
   return 'Unknown error'
 }
 
+function getCreateFailureMessage(kind: ListedEntry['kind'], error: unknown): string {
+  return getFailureMessage(getCreateErrorMessage(kind), error)
+}
+
+function getRenameFailureMessage(kind: ListedEntry['kind'], error: unknown): string {
+  return getFailureMessage(getRenameErrorMessage(kind), error)
+}
+
 function getConflictingEntryName(kind: ListedEntry['kind'], name: string): string {
   return kind === 'directory' ? name : ensureMarkdownExtension(name)
+}
+
+function getRenameTargetPath(entry: ListedEntry, name: string): string {
+  return joinNotePath(getParentPath(entry.path), name)
+}
+
+function hasRenameConflict(entries: ListedEntry[], entry: ListedEntry, nextPath: string): boolean {
+  const descendantPrefix = `${nextPath}/`
+
+  return entries.some((candidate) => {
+    if (candidate.path === entry.path) {
+      return false
+    }
+
+    return candidate.path === nextPath || (entry.kind === 'directory' && candidate.path.startsWith(descendantPrefix))
+  })
+}
+
+function getPreferredRenamePath(currentPath: string | null, path: string, nextPath: string): string | null {
+  if (currentPath === null) {
+    return null
+  }
+
+  if (currentPath === path) {
+    return nextPath
+  }
+
+  return currentPath.startsWith(`${path}/`) ? `${nextPath}${currentPath.slice(path.length)}` : currentPath
 }
 
 async function createEntry(
@@ -151,6 +191,40 @@ export async function createFolder(
   name: string,
 ): Promise<string | null> {
   return createEntry(context, 'directory', parentPath, name)
+}
+
+export async function renameEntry(context: NoteContext, entry: ListedEntry, name: string): Promise<string | null> {
+  const currentStorage = context.storage()
+
+  if (currentStorage === null) {
+    return 'Storage is not ready yet.'
+  }
+
+  context.setErrorMessage(null)
+
+  const normalizedName = normalizeEntryName(name)
+
+  if (normalizedName.length === 0) {
+    return getRenameErrorMessage(entry.kind)
+  }
+
+  const nextPath = getRenameTargetPath(entry, normalizedName)
+
+  if (nextPath === entry.path) {
+    return null
+  }
+
+  if (hasRenameConflict(context.entries(), entry, nextPath)) {
+    return `An entry named "${normalizedName}" already exists here.`
+  }
+
+  try {
+    await currentStorage.renameEntry(entry.path, nextPath, entry.kind)
+    await refreshWorkspace(context, getPreferredRenamePath(context.currentPath(), entry.path, nextPath))
+    return null
+  } catch (error) {
+    return getRenameFailureMessage(entry.kind, error)
+  }
 }
 
 export async function deleteEntry(context: NoteContext, entry: ListedEntry | null) {

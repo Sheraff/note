@@ -7,6 +7,7 @@ import {
   createNote,
   deleteEntry,
   loadNote,
+  renameEntry,
   refreshWorkspace,
   saveCurrentNote,
   type NoteContext,
@@ -164,6 +165,16 @@ function App() {
     void flushPendingSave().then(() => deleteEntry(noteContext, { path, kind })).catch(reportError)
   }
 
+  async function handleRenameEntry(path: string, kind: ListedEntry['kind'], name: string): Promise<string | null> {
+    try {
+      await flushPendingSave()
+      return await renameEntry(noteContext, { path, kind }, name)
+    } catch (error) {
+      reportError(error)
+      return getErrorMessage(error)
+    }
+  }
+
   function handleAttachFolder() {
     void attachFolder(storageContext).catch(reportError)
   }
@@ -227,6 +238,7 @@ function App() {
           onCreateNote={handleCreateNote}
           onDeleteEntry={handleDeleteEntry}
           onOpen={handleOpenNote}
+          onRenameEntry={handleRenameEntry}
         />
         <div class="resize-handle" onMouseDown={handleResizeStart} />
         <EditorPane

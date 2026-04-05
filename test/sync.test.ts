@@ -48,6 +48,19 @@ function createMemoryStorage(initialFiles: StoredFile[]): NoteStorage {
       files.delete(path)
     },
     async createDirectory() {},
+    async renameEntry(path, nextPath) {
+      const file = files.get(path)
+
+      if (file === undefined) {
+        return
+      }
+
+      files.delete(path)
+      files.set(nextPath, {
+        ...file,
+        path: nextPath,
+      })
+    },
   }
 }
 

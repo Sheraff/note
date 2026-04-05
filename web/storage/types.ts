@@ -19,6 +19,7 @@ export type NoteStorage = {
   writeTextFile(path: string, content: string): Promise<StoredFile>
   deleteEntry(path: string): Promise<void>
   createDirectory(path: string): Promise<void>
+  renameEntry(path: string, nextPath: string, kind: ListedEntry['kind']): Promise<void>
 }
 
 export function isDirectoryPickerSupported(): boolean {

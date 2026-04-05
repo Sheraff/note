@@ -53,10 +53,10 @@
           padding: 0.35rem;
           border-color: transparent;
           background: transparent;
+        }
 
-          &:last-child {
-            color: #fca5a5;
-          }
+        >.tree-action-delete {
+          color: #fca5a5;
         }
       }
 
@@ -74,7 +74,7 @@
   }
 }
 
-.tree .tree-row.tree-row-create {
+.tree .tree-row.tree-row-editor {
   >.tree-entry {
     cursor: text;
 

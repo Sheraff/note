@@ -96,6 +96,110 @@ async function listDirectory(directory: FileSystemDirectoryHandle, prefix = ''):
   return entries
 }
 
+async function readTextFileContent(root: FileSystemDirectoryHandle, path: string): Promise<string> {
+  const normalizedPath = normalizeNotePath(path)
+  const handle = await getFileHandleAtPath(root, normalizedPath, false)
+
+  if (handle === null) {
+    throw new Error(`Unable to open ${normalizedPath}`)
+  }
+
+  return (await handle.getFile()).text()
+}
+
+async function writeStoredTextFile(
+  root: FileSystemDirectoryHandle,
+  path: string,
+  content: string,
+): Promise<StoredFile> {
+  const normalizedPath = normalizeNotePath(path)
+  const handle = await getFileHandleAtPath(root, normalizedPath, true)
+
+  if (handle === null) {
+    throw new Error(`Unable to open ${normalizedPath}`)
+  }
+
+  const writable = await handle.createWritable()
+  await writable.write(content)
+  await writable.close()
+
+  return toStoredFile(normalizedPath, await handle.getFile())
+}
+
+async function deleteEntryAtPath(root: FileSystemDirectoryHandle, path: string): Promise<void> {
+  const normalizedPath = normalizeNotePath(path)
+  const segments = normalizedPath.split('/')
+  const name = segments.pop()
+
+  if (name === undefined || name.length === 0) {
+    return
+  }
+
+  const directory = await getDirectoryHandleAtPath(root, segments.join('/'), false)
+
+  if (directory === null) {
+    return
+  }
+
+  try {
+    await directory.removeEntry(name, { recursive: true })
+  } catch (error) {
+    if (!isMissingEntryError(error)) {
+      throw error
+    }
+  }
+}
+
+async function createDirectoryAtPath(root: FileSystemDirectoryHandle, path: string): Promise<void> {
+  const directory = await getDirectoryHandleAtPath(root, path, true)
+
+  if (directory === null) {
+    throw new Error(`Unable to create ${path}`)
+  }
+}
+
+async function copyTextFile(root: FileSystemDirectoryHandle, path: string, nextPath: string): Promise<void> {
+  await writeStoredTextFile(root, nextPath, await readTextFileContent(root, path))
+}
+
+async function renameEntryAtPath(
+  root: FileSystemDirectoryHandle,
+  path: string,
+  nextPath: string,
+  kind: ListedEntry['kind'],
+): Promise<void> {
+  const normalizedPath = normalizeNotePath(path)
+  const normalizedNextPath = normalizeNotePath(nextPath)
+
+  if (kind === 'file') {
+    await copyTextFile(root, normalizedPath, normalizedNextPath)
+    await deleteEntryAtPath(root, normalizedPath)
+    return
+  }
+
+  const directory = await getDirectoryHandleAtPath(root, normalizedPath, false)
+
+  if (directory === null) {
+    throw new Error(`Unable to open ${normalizedPath}`)
+  }
+
+  await createDirectoryAtPath(root, normalizedNextPath)
+
+  for (const entry of await listDirectory(directory, normalizedPath)) {
+    const relativePath = entry.path.slice(normalizedPath.length + 1)
+    const nextEntryPath = normalizeNotePath(`${normalizedNextPath}/${relativePath}`)
+
+    if (entry.kind === 'directory') {
+      await createDirectoryAtPath(root, nextEntryPath)
+      continue
+    }
+
+    await copyTextFile(root, entry.path, nextEntryPath)
+  }
+
+  await deleteEntryAtPath(root, normalizedPath)
+}
+
 export async function pickDirectoryHandle(): Promise<FileSystemDirectoryHandle> {
   if (!isDirectoryPickerSupported()) {
     throw new Error('This browser does not support picking a folder')
@@ -149,48 +253,16 @@ export function createDirectoryStorage(root: FileSystemDirectoryHandle): NoteSto
       return toStoredFile(normalizeNotePath(path), await handle.getFile())
     },
     async writeTextFile(path, content) {
-      const normalizedPath = normalizeNotePath(path)
-      const handle = await getFileHandleAtPath(root, normalizedPath, true)
-
-      if (handle === null) {
-        throw new Error(`Unable to open ${normalizedPath}`)
-      }
-
-      const writable = await handle.createWritable()
-      await writable.write(content)
-      await writable.close()
-
-      return toStoredFile(normalizedPath, await handle.getFile())
+      return writeStoredTextFile(root, path, content)
     },
     async deleteEntry(path) {
-      const normalizedPath = normalizeNotePath(path)
-      const segments = normalizedPath.split('/')
-      const name = segments.pop()
-
-      if (name === undefined || name.length === 0) {
-        return
-      }
-
-      const directory = await getDirectoryHandleAtPath(root, segments.join('/'), false)
-
-      if (directory === null) {
-        return
-      }
-
-      try {
-        await directory.removeEntry(name, { recursive: true })
-      } catch (error) {
-        if (!isMissingEntryError(error)) {
-          throw error
-        }
-      }
+      await deleteEntryAtPath(root, path)
     },
     async createDirectory(path) {
-      const directory = await getDirectoryHandleAtPath(root, path, true)
-
-      if (directory === null) {
-        throw new Error(`Unable to create ${path}`)
-      }
+      await createDirectoryAtPath(root, path)
+    },
+    async renameEntry(path, nextPath, kind) {
+      await renameEntryAtPath(root, path, nextPath, kind)
     },
   }
 }

@@ -1,13 +1,8 @@
 import { Show, createSignal } from 'solid-js'
 import type { TreeNode } from '../notes/tree.ts'
 import { Codicon } from './Codicon.tsx'
-import { FileTree } from './FileTree.tsx'
+import { FileTree, type PendingCreation, type PendingRename } from './FileTree.tsx'
 import './NotesSidebar.css'
-
-type PendingCreation = {
-  kind: TreeNode['kind']
-  parentPath: string | null
-}
 
 export function NotesSidebar(props: {
   currentPath: string | null
@@ -17,11 +12,24 @@ export function NotesSidebar(props: {
   onCreateNote(parentPath: string | null, name: string): Promise<string | null>
   onDeleteEntry(path: string, kind: TreeNode['kind']): void
   onOpen(path: string): void
+  onRenameEntry(path: string, kind: TreeNode['kind'], name: string): Promise<string | null>
 }) {
   const [pendingCreation, setPendingCreation] = createSignal<PendingCreation | null>(null)
+  const [pendingRename, setPendingRename] = createSignal<PendingRename | null>(null)
+
+  function clearPendingAction() {
+    setPendingCreation(null)
+    setPendingRename(null)
+  }
 
   function startCreation(kind: TreeNode['kind'], parentPath: string | null) {
+    setPendingRename(null)
     setPendingCreation({ kind, parentPath })
+  }
+
+  function startRename(path: string, kind: TreeNode['kind'], name: string) {
+    setPendingCreation(null)
+    setPendingRename({ path, kind, name })
   }
 
   async function submitPendingCreation(name: string): Promise<string | null> {
@@ -36,6 +44,16 @@ export function NotesSidebar(props: {
     }
 
     return props.onCreateFolder(nextCreation.parentPath, name)
+  }
+
+  async function submitPendingRename(name: string): Promise<string | null> {
+    const nextRename = pendingRename()
+
+    if (nextRename === null) {
+      return null
+    }
+
+    return props.onRenameEntry(nextRename.path, nextRename.kind, name)
   }
 
   return (
@@ -74,9 +92,8 @@ export function NotesSidebar(props: {
           parentPath={null}
           nodes={props.nodes}
           pendingCreation={pendingCreation()}
-          onCancelCreation={() => {
-            setPendingCreation(null)
-          }}
+          pendingRename={pendingRename()}
+          onCancelAction={clearPendingAction}
           onCreateFolder={(path) => {
             startCreation('directory', path)
           }}
@@ -84,8 +101,10 @@ export function NotesSidebar(props: {
             startCreation('file', path)
           }}
           onDelete={props.onDeleteEntry}
+          onStartRename={startRename}
           onOpen={props.onOpen}
           onSubmitCreation={submitPendingCreation}
+          onSubmitRename={submitPendingRename}
         />
       </Show>
     </aside>

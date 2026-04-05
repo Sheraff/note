@@ -50,6 +50,20 @@ export function normalizeRelativeCreatePath(input: string): string {
   return normalized
 }
 
+export function normalizeEntryName(input: string): string {
+  const trimmed = input.trim()
+
+  if (trimmed.length === 0 || trimmed === '.' || trimmed === '..') {
+    return ''
+  }
+
+  if (trimmed.includes('/') || trimmed.includes('\\')) {
+    return ''
+  }
+
+  return trimmed
+}
+
 export function getParentPath(path: string): string | null {
   const normalized = normalizeNotePath(path)
   const separatorIndex = normalized.lastIndexOf('/')

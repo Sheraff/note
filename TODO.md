@@ -4,13 +4,14 @@
 - [x] date should display as human readable using `Intl.RelativeTimeFormat`
 - [x] new note / new folder / delete note => should all be buttons in the sidebar. (delete => appears when hovering folder or file, new note / new folder => appears on hover of a folder, and in the header)
 - [x] improve file/folder creation flow: do not use the native prompt, instead show an input *where the new file/folder should be* (so if i click "new note" on a folder, it should show an input in the folder, and if i click "new note" in the header, it should show an input in the root). This input should be the size and appearance of a normal file/folder name, and when i submit it (by pressing enter or blurring the input), it should create the file/folder with that name.
-- [ ] rename button => appears on hover of a folder / file
+- [x] rename button => appears on hover of a folder / file
 - [ ] editor-header isn't useful, remove it
 - [ ] use monaspace font
 - [ ] can we auto-sync? (once on page visibility visible, and on every save)
 - [ ] all (most?) buttons should have a keyboard shortcut (use tanstack/hotkeys)
 - [ ] if i'm editing a note in a separate editor (when using file system API) and the same note is open in this app, it should update in the app (currently, after editing if I go back to the app, it seems to remove all the changes I made on the external editor, this only happens if the note was open in both, but works fine if i had another note open in this app)
 - [ ] When I switch from OPFS to the file system API (and there are existing notes in the OPFS) I should be asked if i want to transfer existing notes to the file system
+- [ ] we should be able to drag a file to move it to a different folder, droping on a folder moves it there, hovering (while dragging) on a folder for 1 second should open the folder, and dropping on empty space should move it to the root
 - [ ] we will need to figure out how to support images (and other attachments)
 - [ ] SSO (see ~/web/foo/index.js for how to use our own internal sso, and ~/web/foo/package.json for how to install it)
 

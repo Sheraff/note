@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createConflictCopyPath, normalizeNotePath } from '../server/files.ts'
-import { ensureMarkdownExtension, joinNotePath, normalizeRelativeCreatePath } from '../web/notes/paths.ts'
+import { ensureMarkdownExtension, joinNotePath, normalizeEntryName, normalizeRelativeCreatePath } from '../web/notes/paths.ts'
 import { buildTree } from '../web/notes/tree.ts'
 
 describe('note paths', () => {
@@ -21,6 +21,13 @@ describe('note paths', () => {
     expect(normalizeRelativeCreatePath('~/today.md')).toBe('')
     expect(normalizeRelativeCreatePath('/tmp/today.md')).toBe('')
     expect(normalizeRelativeCreatePath('C:\\Users\\flo\\today.md')).toBe('')
+  })
+
+  it('accepts single entry names and rejects path separators', () => {
+    expect(normalizeEntryName(' today.md ')).toBe('today.md')
+    expect(normalizeEntryName('../today.md')).toBe('')
+    expect(normalizeEntryName('notes/today.md')).toBe('')
+    expect(normalizeEntryName('notes\\today.md')).toBe('')
   })
 
   it('creates filesystem-safe conflict file names', () => {
