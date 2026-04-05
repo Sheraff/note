@@ -227,21 +227,22 @@ export async function renameEntry(context: NoteContext, entry: ListedEntry, name
   }
 }
 
-export async function deleteEntry(context: NoteContext, entry: ListedEntry | null) {
+export async function deleteEntry(context: NoteContext, entry: ListedEntry | null): Promise<boolean> {
   const currentStorage = context.storage()
 
   if (currentStorage === null || entry === null) {
-    return
+    return false
   }
 
   const message =
     entry.kind === 'directory' ? `Delete folder ${entry.path} and all its contents?` : `Delete ${entry.path}?`
 
   if (!window.confirm(message)) {
-    return
+    return false
   }
 
   context.setErrorMessage(null)
   await currentStorage.deleteEntry(entry.path)
   await refreshWorkspace(context, context.currentPath())
+  return true
 }

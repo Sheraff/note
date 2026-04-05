@@ -1,9 +1,23 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { RemoteFile } from '../server/schemas.ts'
 import { applyChangesToSnapshot } from '../server/sync.ts'
 import { hashContent } from '../web/notes/hashes.ts'
+import { createSyncRequester } from '../web/app/sync.ts'
 import { applyRemoteSnapshot, buildLocalChanges } from '../web/notes/sync.ts'
 import type { NoteStorage, StoredFile } from '../web/storage/types.ts'
+
+function createDeferred() {
+  let resolve: (() => void) | undefined
+
+  return {
+    promise: new Promise<void>((nextResolve) => {
+      resolve = nextResolve
+    }),
+    resolve() {
+      resolve?.()
+    },
+  }
+}
 
 async function createStoredFile(path: string, content: string, updatedAt: string): Promise<StoredFile> {
   return {
@@ -145,5 +159,39 @@ describe('client sync helpers', () => {
 
     expect((await storage.readTextFile('notes/remove.md'))).toBeNull()
     expect((await storage.readTextFile('notes/keep-local.md'))?.content).toBe('local only')
+  })
+
+  it('serializes sync requests and preserves pending-save syncs', async () => {
+    const firstRun = createDeferred()
+    const runCalls: Array<{ skipPendingSave: boolean }> = []
+    let runCount = 0
+    const runSync = vi.fn(async (options: { skipPendingSave: boolean }) => {
+      runCalls.push(options)
+      runCount += 1
+
+      if (runCount === 1) {
+        await firstRun.promise
+      }
+    })
+    const onError = vi.fn()
+    const requestSync = createSyncRequester({
+      onError,
+      runSync,
+    })
+
+    const firstRequest = requestSync({ skipPendingSave: true })
+    const secondRequest = requestSync({ skipPendingSave: true })
+    requestSync()
+
+    expect(secondRequest).toBe(firstRequest)
+    expect(runSync).toHaveBeenCalledTimes(1)
+    expect(runCalls).toEqual([{ skipPendingSave: true }])
+
+    firstRun.resolve()
+    await firstRequest
+
+    expect(runSync).toHaveBeenCalledTimes(2)
+    expect(runCalls).toEqual([{ skipPendingSave: true }, { skipPendingSave: false }])
+    expect(onError).not.toHaveBeenCalled()
   })
 })

@@ -13,7 +13,7 @@ import {
   type NoteContext,
 } from './app/notes.ts'
 import { attachFolder, bootstrapWorkspace, switchToOpfs, type StorageContext } from './app/storage.ts'
-import { syncNow, type SyncContext } from './app/sync.ts'
+import { createSyncRequester, syncNow, type SyncContext } from './app/sync.ts'
 import type { MonacoController } from './editor/monaco.ts'
 import { buildTree } from './notes/tree.ts'
 import { DEFAULT_APP_SETTINGS, type AppSettings, type SyncState } from './schemas.ts'
@@ -103,23 +103,47 @@ function App() {
     },
   }
 
-  function scheduleSave() {
-    if (saveTimeout !== undefined) {
-      window.clearTimeout(saveTimeout)
+  const requestSync = createSyncRequester({
+    onError: reportError,
+    runSync(options) {
+      return syncNow(syncContext, options)
+    },
+  })
+
+  function clearPendingSave() {
+    if (saveTimeout === undefined) {
+      return false
     }
 
+    window.clearTimeout(saveTimeout)
+    saveTimeout = undefined
+    return true
+  }
+
+  async function saveAndSyncCurrentNote() {
+    clearPendingSave()
+    await saveCurrentNote(noteContext)
+    await requestSync({ skipPendingSave: true })
+  }
+
+  function scheduleSave() {
+    clearPendingSave()
+
     saveTimeout = window.setTimeout(() => {
-      void saveCurrentNote(noteContext).catch(reportError)
+      saveTimeout = undefined
+      void saveAndSyncCurrentNote().catch(reportError)
     }, 400)
   }
 
-  async function flushPendingSave() {
-    if (saveTimeout !== undefined) {
-      window.clearTimeout(saveTimeout)
-      saveTimeout = undefined
+  async function flushPendingSave(options: { force?: boolean } = {}): Promise<boolean> {
+    const hadPendingSave = clearPendingSave()
+
+    if (!hadPendingSave && options.force !== true) {
+      return false
     }
 
     await saveCurrentNote(noteContext)
+    return true
   }
 
   async function mountEditor() {
@@ -136,15 +160,21 @@ function App() {
         scheduleSave()
       },
       onSave() {
-        void flushPendingSave().catch(reportError)
+        void saveAndSyncCurrentNote().catch(reportError)
       },
     })
   }
 
   async function handleCreateNote(parentPath: string | null, name: string): Promise<string | null> {
     try {
-      await flushPendingSave()
-      return await createNote(noteContext, parentPath, name)
+      const didSave = await flushPendingSave()
+      const message = await createNote(noteContext, parentPath, name)
+
+      if (didSave || message === null) {
+        await requestSync({ skipPendingSave: true })
+      }
+
+      return message
     } catch (error) {
       reportError(error)
       return getErrorMessage(error)
@@ -153,8 +183,14 @@ function App() {
 
   async function handleCreateFolder(parentPath: string | null, name: string): Promise<string | null> {
     try {
-      await flushPendingSave()
-      return await createFolder(noteContext, parentPath, name)
+      const didSave = await flushPendingSave()
+      const message = await createFolder(noteContext, parentPath, name)
+
+      if (didSave || message === null) {
+        await requestSync({ skipPendingSave: true })
+      }
+
+      return message
     } catch (error) {
       reportError(error)
       return getErrorMessage(error)
@@ -162,13 +198,26 @@ function App() {
   }
 
   function handleDeleteEntry(path: string, kind: ListedEntry['kind']) {
-    void flushPendingSave().then(() => deleteEntry(noteContext, { path, kind })).catch(reportError)
+    void (async () => {
+      const didSave = await flushPendingSave()
+      const didDelete = await deleteEntry(noteContext, { path, kind })
+
+      if (didSave || didDelete) {
+        await requestSync({ skipPendingSave: true })
+      }
+    })().catch(reportError)
   }
 
   async function handleRenameEntry(path: string, kind: ListedEntry['kind'], name: string): Promise<string | null> {
     try {
-      await flushPendingSave()
-      return await renameEntry(noteContext, { path, kind }, name)
+      const didSave = await flushPendingSave()
+      const message = await renameEntry(noteContext, { path, kind }, name)
+
+      if (didSave || message === null) {
+        await requestSync({ skipPendingSave: true })
+      }
+
+      return message
     } catch (error) {
       reportError(error)
       return getErrorMessage(error)
@@ -184,7 +233,7 @@ function App() {
   }
 
   function handleSync() {
-    void syncNow(syncContext).catch(reportError)
+    void requestSync().catch(reportError)
   }
 
   function handleResizeStart(event: MouseEvent) {
@@ -211,7 +260,14 @@ function App() {
   }
 
   function handleOpenNote(path: string) {
-    void flushPendingSave().then(() => loadNote(noteContext, path)).catch(reportError)
+    void (async () => {
+      const didSave = await flushPendingSave()
+      await loadNote(noteContext, path)
+
+      if (didSave) {
+        await requestSync({ skipPendingSave: true })
+      }
+    })().catch(reportError)
   }
 
   onMount(() => {
@@ -220,9 +276,7 @@ function App() {
   })
 
   onCleanup(() => {
-    if (saveTimeout !== undefined) {
-      window.clearTimeout(saveTimeout)
-    }
+    clearPendingSave()
 
     editor?.dispose()
   })

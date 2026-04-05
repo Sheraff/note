@@ -7,7 +7,7 @@
 - [x] rename button => appears on hover of a folder / file
 - [x] editor-header isn't useful, remove it
 - [x] use monaspace font
-- [ ] can we auto-sync? (once on page visibility visible, and on every save)
+- [x] can we auto-sync? (once on page visibility visible, and on every save? or is there a more logical approach?)
 - [ ] all (most?) buttons should have a keyboard shortcut (use tanstack/hotkeys)
 - [ ] if i'm editing a note in a separate editor (when using file system API) and the same note is open in this app, it should update in the app (currently, after editing if I go back to the app, it seems to remove all the changes I made on the external editor, this only happens if the note was open in both, but works fine if i had another note open in this app)
 - [ ] When I switch from OPFS to the file system API (and there are existing notes in the OPFS) I should be asked if i want to transfer existing notes to the file system
