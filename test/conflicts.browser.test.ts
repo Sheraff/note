@@ -10,10 +10,6 @@ type SyncSnapshotResponse = {
   }>
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 function createBaseEntry(file: RemoteFile | null): SyncBaseEntry | null {
   if (file === null) {
     return null
@@ -38,6 +34,11 @@ async function getRemoteFile(request: APIRequestContext, path: string): Promise<
   return snapshot.files.find((file) => file.path === path) ?? null
 }
 
+async function getRemoteFiles(request: APIRequestContext, prefix: string): Promise<RemoteFile[]> {
+  const snapshot = await getSyncSnapshot(request)
+  return snapshot.files.filter((file) => file.path.startsWith(prefix)).sort((left, right) => left.path.localeCompare(right.path))
+}
+
 async function pushRemoteFile(request: APIRequestContext, path: string, content: string): Promise<void> {
   const remoteFile = await getRemoteFile(request, path)
 
@@ -50,6 +51,27 @@ async function pushRemoteFile(request: APIRequestContext, path: string, content:
           kind: 'upsert',
           path,
           content,
+          updatedAt: new Date().toISOString(),
+          base: createBaseEntry(remoteFile),
+        },
+      ],
+    },
+  })
+
+  expect(response.ok()).toBe(true)
+}
+
+async function pushRemoteDelete(request: APIRequestContext, path: string): Promise<void> {
+  const remoteFile = await getRemoteFile(request, path)
+
+  expect(remoteFile).not.toBeNull()
+
+  const response = await request.post('/api/sync/push', {
+    data: {
+      changes: [
+        {
+          kind: 'delete',
+          path,
           updatedAt: new Date().toISOString(),
           base: createBaseEntry(remoteFile),
         },
@@ -146,9 +168,24 @@ async function listOpfsFiles(page: Page, prefix: string): Promise<string[]> {
   }, prefix)
 }
 
-test('handles a remote conflict in Monaco diff mode without creating an automatic conflict copy', async ({ page, request }) => {
-  test.slow()
+type RemoteConflictScenario = {
+  folder: string
+  fileName: string
+  path: string
+  baseContent: string
+  remoteContent: string
+  localContent: string
+}
 
+type RemoteDeletionConflictScenario = {
+  folder: string
+  fileName: string
+  path: string
+  baseContent: string
+  localContent: string
+}
+
+async function setupRemoteConflict(page: Page, request: APIRequestContext): Promise<RemoteConflictScenario> {
   const runId = randomUUID()
   const folder = `e2e/${runId}`
   const fileName = `conflict-${runId}.md`
@@ -156,7 +193,6 @@ test('handles a remote conflict in Monaco diff mode without creating an automati
   const baseContent = '# Base version\n'
   const remoteContent = '# Cloud version\n'
   const localContent = '# Local draft\n'
-  const mergedContent = '# Merged resolution\n'
 
   await page.goto('/')
   await expect(page).toHaveTitle('Note')
@@ -177,13 +213,90 @@ test('handles a remote conflict in Monaco diff mode without creating an automati
   await replaceEditorContent(page, localContent)
   await clickSync(page)
 
-  const conflictButton = page.getByRole('button', { name: new RegExp(`Cloud conflict: ${escapeRegExp(path)}`) })
+  const conflictButton = page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) })
   const noteButton = page.getByRole('button', { name: fileName, exact: true })
 
   await expect(conflictButton).toBeVisible()
   await expect(noteButton).toHaveClass(/tree-entry-conflict/)
   await expect.poll(async () => await readOpfsFile(page, path)).toBe(localContent)
   await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual([path])
+
+  return {
+    folder,
+    fileName,
+    path,
+    baseContent,
+    remoteContent,
+    localContent,
+  }
+}
+
+async function setupRemoteDeletionConflict(page: Page, request: APIRequestContext): Promise<RemoteDeletionConflictScenario> {
+  const runId = randomUUID()
+  const folder = `e2e/${runId}`
+  const fileName = `deletion-${runId}.md`
+  const path = `${folder}/${fileName}`
+  const baseContent = '# Base version\n'
+  const localContent = '# Local draft after cloud deletion\n'
+
+  await page.goto('/')
+  await expect(page).toHaveTitle('Note')
+  await expect(page.getByRole('button', { name: 'New note' })).toBeEnabled()
+  await waitForSyncIdle(page)
+
+  await createNote(page, path)
+  await replaceEditorContent(page, baseContent)
+  await clickSync(page)
+
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(baseContent)
+  await expect.poll(async () => (await getRemoteFile(request, path))?.content ?? null).toBe(baseContent)
+  await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual([path])
+
+  await pushRemoteDelete(request, path)
+  await expect.poll(async () => {
+    const remoteFile = await getRemoteFile(request, path)
+    return remoteFile === null ? null : remoteFile.deletedAt !== null
+  }).toBe(true)
+
+  await replaceEditorContent(page, localContent)
+  await clickSync(page)
+
+  const conflictButton = page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) })
+  const noteButton = page.getByRole('button', { name: fileName, exact: true })
+
+  await expect(conflictButton).toBeVisible()
+  await expect(noteButton).toHaveClass(/tree-entry-conflict/)
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(localContent)
+  await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual([path])
+
+  return {
+    folder,
+    fileName,
+    path,
+    baseContent,
+    localContent,
+  }
+}
+
+function getConflictCopyPath(paths: string[], originalPath: string): string {
+  expect(paths).toHaveLength(2)
+  const copyPath = paths.find((path) => path !== originalPath)
+
+  expect(copyPath).toBeDefined()
+  expect(copyPath).toContain('.conflict-')
+
+  return copyPath as string
+}
+
+test('handles a remote conflict in Monaco diff mode without creating an automatic conflict copy', async ({ page, request }) => {
+  test.slow()
+
+  const { folder, fileName, path } = await setupRemoteConflict(page, request)
+  const mergedContent = '# Merged resolution\n'
+
+  const conflictButton = page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) })
+
+  await expect(conflictButton).toBeVisible()
 
   await conflictButton.click()
   await page.getByRole('button', { name: 'Resolve conflicting changes' }).click()
@@ -204,4 +317,83 @@ test('handles a remote conflict in Monaco diff mode without creating an automati
   await expect.poll(async () => await readOpfsFile(page, path)).toBe(mergedContent)
   await expect.poll(async () => (await getRemoteFile(request, path))?.content ?? null).toBe(mergedContent)
   await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual([path])
+})
+
+test('accepts the cloud version for a remote conflict', async ({ page, request }) => {
+  const { folder, path, remoteContent } = await setupRemoteConflict(page, request)
+
+  const conflictButton = page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) })
+
+  await conflictButton.click()
+  await page.getByRole('button', { name: 'Accept cloud version' }).click()
+
+  await expect(page.getByRole('button', { name: /Cloud conflict:/ })).toHaveCount(0)
+  await expect(page.locator('.monaco-diff-editor')).toHaveCount(0)
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(remoteContent)
+  await expect.poll(async () => (await getRemoteFile(request, path))?.content ?? null).toBe(remoteContent)
+  await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual([path])
+  await expect(page.locator('.monaco-editor .view-lines').last()).toContainText('# Cloud version')
+})
+
+test('saves the current draft separately for a remote conflict', async ({ page, request }) => {
+  const { folder, fileName, path, localContent, remoteContent } = await setupRemoteConflict(page, request)
+  const originalButton = page.getByRole('button', { name: fileName, exact: true })
+
+  const conflictButton = page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) })
+
+  await conflictButton.click()
+  await page.getByRole('button', { name: 'Save my current draft separately' }).click()
+
+  await expect(page.getByRole('button', { name: /Cloud conflict:/ })).toHaveCount(0)
+  await expect(page.locator('.monaco-diff-editor')).toHaveCount(0)
+  await expect.poll(async () => (await listOpfsFiles(page, `${folder}/`)).length).toBe(2)
+
+  const paths = await listOpfsFiles(page, `${folder}/`)
+  const copyPath = getConflictCopyPath(paths, path)
+  const copyName = copyPath.split('/').at(-1) ?? copyPath
+
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(remoteContent)
+  await expect.poll(async () => await readOpfsFile(page, copyPath)).toBe(localContent)
+  await expect(originalButton).toHaveAttribute('aria-current', 'true')
+  await expect(page.getByRole('button', { name: copyName, exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: copyName, exact: true })).not.toHaveAttribute('aria-current', 'true')
+  await expect(page.locator('.monaco-editor .view-lines').last()).toContainText('# Cloud version')
+  await expect.poll(async () => (await getRemoteFile(request, path))?.content ?? null).toBe(remoteContent)
+  await expect.poll(async () => (await getRemoteFiles(request, `${folder}/`)).length).toBe(2)
+  await expect.poll(async () => {
+    const remoteFiles = await getRemoteFiles(request, `${folder}/`)
+    return remoteFiles.find((file) => file.path === copyPath)?.content ?? null
+  }).toBe(localContent)
+
+  expect(paths).toEqual([copyPath, path].sort())
+})
+
+test('handles a remote deletion conflict with deletion-specific labels', async ({ page, request }) => {
+  const { folder, fileName, path } = await setupRemoteDeletionConflict(page, request)
+
+  const conflictButton = page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) })
+  const noteButton = page.getByRole('button', { name: fileName, exact: true })
+
+  await conflictButton.click()
+  await expect(page.getByRole('button', { name: 'Accept cloud deletion' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Save my current draft separately' })).toBeVisible()
+  await page.getByRole('button', { name: 'Resolve conflicting changes' }).click()
+
+  await expect(page.locator('.monaco-diff-editor')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Save cloud deletion' })).toBeVisible()
+  await page.getByRole('button', { name: 'Cancel' }).click()
+
+  await expect(page.locator('.monaco-diff-editor')).toHaveCount(0)
+  await expect(conflictButton).toBeVisible()
+  await conflictButton.click()
+  await page.getByRole('button', { name: 'Accept cloud deletion' }).click()
+
+  await expect(page.getByRole('button', { name: /Cloud conflict:/ })).toHaveCount(0)
+  await expect(noteButton).toHaveCount(0)
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(null)
+  await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual([])
+  await expect.poll(async () => {
+    const remoteFile = await getRemoteFile(request, path)
+    return remoteFile === null ? null : remoteFile.deletedAt !== null
+  }).toBe(true)
 })
