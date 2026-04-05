@@ -34,6 +34,8 @@ const isDev = parsed.values.dev
 const port = Number(parsed.values.port ?? process.env.PORT ?? 5743)
 const serverDir = fileURLToPath(new URL('.', import.meta.url))
 const clientDistDir = isDev ? resolve(serverDir, '../dist/client') : resolve(serverDir, '../client')
+const IMMUTABLE_ASSET_CACHE_CONTROL = 'public, max-age=31536000, immutable'
+const HTML_CACHE_CONTROL = 'no-cache'
 
 export function createApp() {
   const app = new Hono<{ Bindings: HttpBindings }>()
@@ -112,7 +114,20 @@ if (isDev) {
     }
   })
 } else {
-  app.use('*', serveStatic({ root: clientDistDir }))
+  app.use(
+    '*',
+    serveStatic({
+      root: clientDistDir,
+      onFound(_, c) {
+        if (c.req.path.startsWith('/assets/')) {
+          c.header('Cache-Control', IMMUTABLE_ASSET_CACHE_CONTROL)
+          return
+        }
+
+        c.header('Cache-Control', HTML_CACHE_CONTROL)
+      },
+    }),
+  )
 
   const indexHtml = await readFile(resolve(clientDistDir, 'index.html'), 'utf8')
 
@@ -121,6 +136,7 @@ if (isDev) {
       return c.notFound()
     }
 
+    c.header('Cache-Control', HTML_CACHE_CONTROL)
     return c.html(indexHtml)
   })
 }
