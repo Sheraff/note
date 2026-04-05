@@ -23,6 +23,15 @@ export type SaveCurrentNoteResult =
   | { status: 'reloaded' }
   | { status: 'conflict'; conflict: NoteConflict }
 
+export type OpenNoteSyncSnapshot = {
+  path: string
+  content: string
+}
+
+export type RefreshWorkspaceOptions = {
+  openNoteSyncSnapshot?: OpenNoteSyncSnapshot | null
+}
+
 export type NoteContext = {
   storage(): NoteStorage | null
   entries(): ListedEntry[]
@@ -92,6 +101,25 @@ function pickOpenPath(
   )
 }
 
+function shouldKeepCurrentNoteDuringRefresh(
+  context: NoteContext,
+  nextPath: string,
+  nextFile: StoredFile | null,
+  options: RefreshWorkspaceOptions,
+): boolean {
+  const snapshot = options.openNoteSyncSnapshot ?? null
+
+  if (snapshot === null || snapshot.path !== nextPath || context.currentPath() !== nextPath) {
+    return false
+  }
+
+  if (nextFile?.content === snapshot.content) {
+    return true
+  }
+
+  return context.draftContent() !== snapshot.content
+}
+
 export async function loadNote(context: NoteContext, path: string | null): Promise<void> {
   const currentStorage = context.storage()
 
@@ -110,7 +138,11 @@ export async function loadNote(context: NoteContext, path: string | null): Promi
   await applyLoadedFile(context, file)
 }
 
-export async function refreshWorkspace(context: NoteContext, preferredPath: string | null): Promise<void> {
+export async function refreshWorkspace(
+  context: NoteContext,
+  preferredPath: string | null,
+  options: RefreshWorkspaceOptions = {},
+): Promise<void> {
   const currentStorage = context.storage()
 
   if (currentStorage === null) {
@@ -119,7 +151,25 @@ export async function refreshWorkspace(context: NoteContext, preferredPath: stri
 
   const nextEntries = await currentStorage.listEntries()
   context.setEntries(nextEntries)
-  await loadNote(context, pickOpenPath(nextEntries, context.currentPath(), preferredPath))
+  const nextPath = pickOpenPath(nextEntries, context.currentPath(), preferredPath)
+
+  if (nextPath === null) {
+    clearLoadedFile(context)
+    return
+  }
+
+  const nextFile = await currentStorage.readTextFile(nextPath)
+
+  if (nextFile === null) {
+    await refreshWorkspace(context, null, options)
+    return
+  }
+
+  if (shouldKeepCurrentNoteDuringRefresh(context, nextPath, nextFile, options)) {
+    return
+  }
+
+  await applyLoadedFile(context, nextFile)
 }
 
 export async function saveCurrentNote(context: NoteContext): Promise<SaveCurrentNoteResult> {

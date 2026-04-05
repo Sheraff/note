@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createFolder, renameEntry, saveCurrentNote, type NoteConflict, type NoteContext } from '../web/app/notes.ts'
+import { createFolder, refreshWorkspace, renameEntry, saveCurrentNote, type NoteConflict, type NoteContext } from '../web/app/notes.ts'
 import { hashContent } from '../web/notes/hashes.ts'
 import type { AppSettings } from '../web/schemas.ts'
 import type { ListedEntry, NoteStorage, StoredFile } from '../web/storage/types.ts'
@@ -539,6 +539,202 @@ describe('saveCurrentNote', () => {
       diskFile,
       loadedSnapshot: snapshot,
       source: 'local',
+    })
+  })
+})
+
+describe('refreshWorkspace', () => {
+  it('keeps the open note loaded when sync yielded the same content', async () => {
+    const file = await createStoredFile('notes/today.md', '# Today\n', '2026-04-05T00:00:00.000Z')
+    const setCurrentPath = vi.fn()
+    const setDraftContent = vi.fn()
+    const setEntries = vi.fn()
+    const setEditorValue = vi.fn()
+    const setLoadedFileSnapshot = vi.fn()
+    const saveSettings = vi.fn(async () => {})
+
+    const storage: NoteStorage = {
+      key: 'directory',
+      label: 'Notes',
+      async listEntries() {
+        return [{ kind: 'file', path: 'notes/today.md' }]
+      },
+      async listFiles() {
+        return []
+      },
+      async readTextFile() {
+        return file
+      },
+      async writeTextFile(path: string, content: string): Promise<StoredFile> {
+        return {
+          path,
+          content,
+          contentHash: 'hash',
+          updatedAt: new Date().toISOString(),
+        }
+      },
+      async deleteEntry() {},
+      async createDirectory() {},
+      async renameEntry() {},
+    }
+
+    await refreshWorkspace(
+      createMockContext(storage, () => {}, {
+        currentPath: 'notes/today.md',
+        draftContent: '# Today\n',
+        loadedFileSnapshot: file,
+        saveSettings,
+        setCurrentPath,
+        setDraftContent,
+        setEntries,
+        setEditorValue,
+        setLoadedFileSnapshot,
+      }),
+      'notes/today.md',
+      {
+        openNoteSyncSnapshot: {
+          path: 'notes/today.md',
+          content: '# Today\n',
+        },
+      },
+    )
+
+    expect(setEntries).toHaveBeenCalledWith([{ kind: 'file', path: 'notes/today.md' }])
+    expect(setCurrentPath).not.toHaveBeenCalled()
+    expect(setDraftContent).not.toHaveBeenCalled()
+    expect(setEditorValue).not.toHaveBeenCalled()
+    expect(setLoadedFileSnapshot).not.toHaveBeenCalled()
+    expect(saveSettings).not.toHaveBeenCalled()
+  })
+
+  it('keeps the open note loaded when the user changed it after the sync snapshot', async () => {
+    const syncedFile = await createStoredFile('notes/today.md', '# Remote\n', '2026-04-05T01:00:00.000Z')
+    const currentFile = await createStoredFile('notes/today.md', '# Today\n', '2026-04-05T00:00:00.000Z')
+    const setCurrentPath = vi.fn()
+    const setDraftContent = vi.fn()
+    const setEntries = vi.fn()
+    const setEditorValue = vi.fn()
+    const setLoadedFileSnapshot = vi.fn()
+    const saveSettings = vi.fn(async () => {})
+
+    const storage: NoteStorage = {
+      key: 'directory',
+      label: 'Notes',
+      async listEntries() {
+        return [{ kind: 'file', path: 'notes/today.md' }]
+      },
+      async listFiles() {
+        return []
+      },
+      async readTextFile() {
+        return syncedFile
+      },
+      async writeTextFile(path: string, content: string): Promise<StoredFile> {
+        return {
+          path,
+          content,
+          contentHash: 'hash',
+          updatedAt: new Date().toISOString(),
+        }
+      },
+      async deleteEntry() {},
+      async createDirectory() {},
+      async renameEntry() {},
+    }
+
+    await refreshWorkspace(
+      createMockContext(storage, () => {}, {
+        currentPath: 'notes/today.md',
+        draftContent: '# Draft\n',
+        loadedFileSnapshot: currentFile,
+        saveSettings,
+        setCurrentPath,
+        setDraftContent,
+        setEntries,
+        setEditorValue,
+        setLoadedFileSnapshot,
+      }),
+      'notes/today.md',
+      {
+        openNoteSyncSnapshot: {
+          path: 'notes/today.md',
+          content: '# Today\n',
+        },
+      },
+    )
+
+    expect(setEntries).toHaveBeenCalledWith([{ kind: 'file', path: 'notes/today.md' }])
+    expect(setCurrentPath).not.toHaveBeenCalled()
+    expect(setDraftContent).not.toHaveBeenCalled()
+    expect(setEditorValue).not.toHaveBeenCalled()
+    expect(setLoadedFileSnapshot).not.toHaveBeenCalled()
+    expect(saveSettings).not.toHaveBeenCalled()
+  })
+
+  it('reloads the open note when sync changed it and the user did not', async () => {
+    const currentFile = await createStoredFile('notes/today.md', '# Today\n', '2026-04-05T00:00:00.000Z')
+    const syncedFile = await createStoredFile('notes/today.md', '# Remote\n', '2026-04-05T01:00:00.000Z')
+    const setCurrentPath = vi.fn()
+    const setDraftContent = vi.fn()
+    const setEntries = vi.fn()
+    const setEditorValue = vi.fn()
+    const setLoadedFileSnapshot = vi.fn()
+    const saveSettings = vi.fn(async () => {})
+
+    const storage: NoteStorage = {
+      key: 'directory',
+      label: 'Notes',
+      async listEntries() {
+        return [{ kind: 'file', path: 'notes/today.md' }]
+      },
+      async listFiles() {
+        return []
+      },
+      async readTextFile() {
+        return syncedFile
+      },
+      async writeTextFile(path: string, content: string): Promise<StoredFile> {
+        return {
+          path,
+          content,
+          contentHash: 'hash',
+          updatedAt: new Date().toISOString(),
+        }
+      },
+      async deleteEntry() {},
+      async createDirectory() {},
+      async renameEntry() {},
+    }
+
+    await refreshWorkspace(
+      createMockContext(storage, () => {}, {
+        currentPath: 'notes/today.md',
+        draftContent: '# Today\n',
+        loadedFileSnapshot: currentFile,
+        saveSettings,
+        setCurrentPath,
+        setDraftContent,
+        setEntries,
+        setEditorValue,
+        setLoadedFileSnapshot,
+      }),
+      'notes/today.md',
+      {
+        openNoteSyncSnapshot: {
+          path: 'notes/today.md',
+          content: '# Today\n',
+        },
+      },
+    )
+
+    expect(setEntries).toHaveBeenCalledWith([{ kind: 'file', path: 'notes/today.md' }])
+    expect(setCurrentPath).toHaveBeenCalledWith('notes/today.md')
+    expect(setDraftContent).toHaveBeenCalledWith('# Remote\n')
+    expect(setEditorValue).toHaveBeenCalledWith('# Remote\n')
+    expect(setLoadedFileSnapshot).toHaveBeenCalledWith(syncedFile)
+    expect(saveSettings).toHaveBeenCalledWith({
+      backend: 'directory',
+      lastOpenedPath: 'notes/today.md',
     })
   })
 })

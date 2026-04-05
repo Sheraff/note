@@ -13,6 +13,8 @@ import {
   saveCurrentNote,
   type NoteConflict,
   type NoteContext,
+  type OpenNoteSyncSnapshot,
+  type RefreshWorkspaceOptions,
   type SaveCurrentNoteResult,
 } from './app/notes.ts'
 import { attachFolder, bootstrapWorkspace, reconnectFolder, switchToOpfs, type StorageContext } from './app/storage.ts'
@@ -70,6 +72,7 @@ function App() {
   let editorMode: EditorMode = 'plain'
   let saveTimeout: number | undefined
   let autoSyncInterval: number | undefined
+  let activeSyncOpenNoteSnapshots: Map<string, OpenNoteSyncSnapshot> | null = null
   let lastAutoSyncAt = 0
 
   const [sidebarWidth, setSidebarWidth] = createSignal(300)
@@ -191,6 +194,37 @@ function App() {
     }
 
     setNoteConflictSignal(updater(conflict))
+  }
+
+  function beginSyncOpenNoteTracking() {
+    activeSyncOpenNoteSnapshots = new Map()
+    snapshotCurrentOpenNoteForSync()
+  }
+
+  function endSyncOpenNoteTracking() {
+    activeSyncOpenNoteSnapshots = null
+  }
+
+  function snapshotCurrentOpenNoteForSync() {
+    const path = currentPath()
+
+    if (activeSyncOpenNoteSnapshots === null || path === null || activeSyncOpenNoteSnapshots.has(path)) {
+      return
+    }
+
+    activeSyncOpenNoteSnapshots.set(path, {
+      path,
+      content: draftContent(),
+    })
+  }
+
+  function getSyncRefreshOptions(preferredPath: string | null): RefreshWorkspaceOptions {
+    const snapshotPath = preferredPath ?? currentPath()
+
+    return {
+      openNoteSyncSnapshot:
+        snapshotPath === null ? null : (activeSyncOpenNoteSnapshots?.get(snapshotPath) ?? null),
+    }
   }
 
   function syncConflictDraft(value: string) {
@@ -325,14 +359,20 @@ function App() {
     setNoteConflict,
     flushPendingSave,
     refreshWorkspace(preferredPath) {
-      return refreshWorkspace(noteContext, preferredPath)
+      return refreshWorkspace(noteContext, preferredPath, getSyncRefreshOptions(preferredPath))
     },
   }
 
   const requestSync = createSyncRequester({
     onError: reportError,
-    runSync(options) {
-      return syncNow(syncContext, options)
+    async runSync(options) {
+      beginSyncOpenNoteTracking()
+
+      try {
+        await syncNow(syncContext, options)
+      } finally {
+        endSyncOpenNoteTracking()
+      }
     },
   })
 
@@ -351,6 +391,7 @@ function App() {
 
     if (conflict === null || conflict.path !== path) {
       await loadNote(noteContext, path)
+      snapshotCurrentOpenNoteForSync()
       return
     }
 
@@ -360,6 +401,7 @@ function App() {
     setDraftContent(conflict.draftContent)
     editor?.setValue(conflict.draftContent)
     setLoadedFileSnapshot(conflict.loadedSnapshot)
+    snapshotCurrentOpenNoteForSync()
     await saveSettings({
       ...settings(),
       lastOpenedPath: conflict.path,
@@ -459,6 +501,7 @@ function App() {
     setHasUnsyncedWorkspaceChanges(true)
     setNoteConflict(null)
     await loadNote(noteContext, conflict.path)
+    snapshotCurrentOpenNoteForSync()
     await requestSync({ mode: 'full', skipPendingSave: true })
   }
 
@@ -477,12 +520,14 @@ function App() {
       await currentStorage.writeTextFile(conflict.path, conflict.diskFile.content)
       setNoteConflict(null)
       await loadNote(noteContext, conflict.path)
+      snapshotCurrentOpenNoteForSync()
       return
     }
 
     await currentStorage.deleteEntry(conflict.path)
     setNoteConflict(null)
     await refreshWorkspace(noteContext, null)
+    snapshotCurrentOpenNoteForSync()
   }
 
   async function saveConflictDraftAsCopy() {
@@ -508,6 +553,7 @@ function App() {
     setHasUnsyncedWorkspaceChanges(true)
     setNoteConflict(null)
     await refreshWorkspace(noteContext, conflict.diskFile === null ? copyPath : conflict.path)
+    snapshotCurrentOpenNoteForSync()
     await requestSync({ mode: 'full', skipPendingSave: true })
   }
 
@@ -566,6 +612,8 @@ function App() {
 
       const message = await createNote(noteContext, parentPath, name)
 
+      snapshotCurrentOpenNoteForSync()
+
       if (shouldSyncAfterSaveResult(saveResult) || message === null) {
         setHasUnsyncedWorkspaceChanges(true)
         await requestSync({ mode: 'full', skipPendingSave: true })
@@ -587,6 +635,8 @@ function App() {
       }
 
       const message = await createFolder(noteContext, parentPath, name)
+
+      snapshotCurrentOpenNoteForSync()
 
       if (shouldSyncAfterSaveResult(saveResult) || message === null) {
         setHasUnsyncedWorkspaceChanges(true)
@@ -610,6 +660,8 @@ function App() {
 
       const didDelete = await deleteEntry(noteContext, { path, kind })
 
+      snapshotCurrentOpenNoteForSync()
+
       if (shouldSyncAfterSaveResult(saveResult) || didDelete) {
         setHasUnsyncedWorkspaceChanges(true)
         await requestSync({ mode: 'full', skipPendingSave: true })
@@ -626,6 +678,8 @@ function App() {
       }
 
       const message = await renameEntry(noteContext, { path, kind }, name)
+
+      snapshotCurrentOpenNoteForSync()
 
       if (shouldSyncAfterSaveResult(saveResult) || message === null) {
         setHasUnsyncedWorkspaceChanges(true)
@@ -742,6 +796,7 @@ function App() {
           clearPendingSave()
           setIsDiffMode(false)
           await loadNote(noteContext, path)
+          snapshotCurrentOpenNoteForSync()
           await mountEditor('plain')
           editor?.focus()
           return
@@ -755,6 +810,7 @@ function App() {
       }
 
       await loadNote(noteContext, path)
+      snapshotCurrentOpenNoteForSync()
 
       if (shouldSyncAfterSaveResult(saveResult)) {
         await requestSync({ mode: 'full', skipPendingSave: true })
