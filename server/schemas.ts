@@ -58,6 +58,11 @@ export const PushRequestSchema = v.object({
   changes: v.array(SyncChangeSchema),
 })
 
+export const SyncConflictSchema = v.object({
+  path: NotePathSchema,
+  theirs: v.nullable(RemoteFileSchema),
+})
+
 export const HealthResponseSchema = v.object({
   ok: v.boolean(),
 })
@@ -68,10 +73,12 @@ export const ManifestResponseSchema = v.object({
 
 export const SyncResponseSchema = v.object({
   files: v.array(RemoteFileSchema),
+  conflicts: v.array(SyncConflictSchema),
 })
 
 export type SyncBaseEntry = v.InferOutput<typeof SyncBaseEntrySchema>
 export type RemoteFile = v.InferOutput<typeof RemoteFileSchema>
 export type ManifestEntry = v.InferOutput<typeof ManifestEntrySchema>
 export type SyncChange = v.InferOutput<typeof SyncChangeSchema>
+export type SyncConflict = v.InferOutput<typeof SyncConflictSchema>
 export type PushRequest = v.InferOutput<typeof PushRequestSchema>

@@ -4,10 +4,14 @@ import './EditorPane.css'
 
 export function EditorPane(props: {
   currentPath: string | null
+  isDiffMode: boolean
   reconnectableDirectoryName: string | null
   onAttachFolder(): void
+  onCancelConflictDiff(): void
   onEditorMount(element: HTMLDivElement): void
   onReconnectFolder(): void
+  onSaveResolvedAsCopy(): void
+  onSaveResolvedVersion(): void
   onSwitchToOpfs(): void
 }) {
   const reconnectLabel = () =>
@@ -16,7 +20,29 @@ export function EditorPane(props: {
   return (
     <section class="editor">
       <div class="stage">
-        <div class="surface" ref={props.onEditorMount} />
+        <div classList={{ surface: true, 'surface-with-toolbar': props.isDiffMode }} ref={props.onEditorMount} />
+        <Show when={props.isDiffMode}>
+          <div class="editor-diff-actions">
+            <div>
+              <strong>Resolve conflict</strong>
+              <span>{props.currentPath}</span>
+            </div>
+            <div class="editor-diff-action-buttons">
+              <button type="button" onClick={props.onSaveResolvedVersion}>
+                <Codicon name="check" />
+                <span>Save resolved version</span>
+              </button>
+              <button type="button" onClick={props.onSaveResolvedAsCopy}>
+                <Codicon name="copy" />
+                <span>Save resolved as copy</span>
+              </button>
+              <button type="button" onClick={props.onCancelConflictDiff}>
+                <Codicon name="close" />
+                <span>Cancel</span>
+              </button>
+            </div>
+          </div>
+        </Show>
         <Show when={props.currentPath === null}>
           <div class="editor-empty">
             {props.reconnectableDirectoryName === null ? (

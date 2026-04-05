@@ -20,6 +20,21 @@ export function normalizeNotePath(input: string): string {
   return segments.join('/')
 }
 
+export function createConflictCopyPath(path: string, timestamp: string, attempt = 0): string {
+  const normalizedPath = normalizeNotePath(path)
+  const separatorIndex = normalizedPath.lastIndexOf('/')
+  const directory = separatorIndex >= 0 ? normalizedPath.slice(0, separatorIndex) : ''
+  const fileName = separatorIndex >= 0 ? normalizedPath.slice(separatorIndex + 1) : normalizedPath
+  const extensionIndex = fileName.lastIndexOf('.')
+  const baseName = extensionIndex > 0 ? fileName.slice(0, extensionIndex) : fileName
+  const extension = extensionIndex > 0 ? fileName.slice(extensionIndex) : ''
+  const safeTimestamp = timestamp.replaceAll(':', '-').replaceAll('.', '-')
+  const suffix = attempt === 0 ? '' : `.${attempt + 1}`
+  const conflictName = `${baseName}.conflict-${safeTimestamp}${suffix}${extension}`
+
+  return directory.length > 0 ? `${directory}/${conflictName}` : conflictName
+}
+
 export function ensureMarkdownExtension(path: string): string {
   const normalized = normalizeNotePath(path)
 

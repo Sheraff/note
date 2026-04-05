@@ -40,6 +40,25 @@ export type MonacoController = {
   dispose(): void
 }
 
+function createEditorOptions() {
+  return {
+    theme: 'vs-dark',
+    automaticLayout: true,
+    minimap: { enabled: false },
+    wordWrap: 'on' as const,
+    lineNumbers: 'on' as const,
+    padding: { top: 20 },
+    tabSize: 2,
+    insertSpaces: true,
+    fontFamily: MONASPACE_FONT_FAMILY,
+    fontWeight: '300',
+    fontSize: 14,
+    lineHeight: 1.6,
+    fontLigatures: MONASPACE_FONT_LIGATURES,
+    fontVariations: true,
+  }
+}
+
 export function createMonacoEditor(
   element: HTMLElement,
   options: {
@@ -55,20 +74,7 @@ export function createMonacoEditor(
   const editor = monaco.editor.create(element, {
     value: options.initialValue,
     language: 'markdown',
-    theme: 'vs-dark',
-    automaticLayout: true,
-    minimap: { enabled: false },
-    wordWrap: 'on',
-    lineNumbers: 'on',
-    padding: { top: 20 },
-    tabSize: 2,
-    insertSpaces: true,
-    fontFamily: MONASPACE_FONT_FAMILY,
-    fontWeight: '300',
-    fontSize: 14,
-    lineHeight: 1.6,
-    fontLigatures: MONASPACE_FONT_LIGATURES,
-    fontVariations: true,
+    ...createEditorOptions(),
   })
 
   void ensureMonaspaceFont().then(() => {
@@ -106,6 +112,75 @@ export function createMonacoEditor(
     },
     dispose() {
       editor.dispose()
+    },
+  }
+}
+
+export function createMonacoDiffEditor(
+  element: HTMLElement,
+  options: {
+    originalValue: string
+    modifiedValue: string
+    onChange(value: string): void
+    onSave(): void
+  },
+): MonacoController {
+  let isApplyingValue = false
+
+  void ensureMonaspaceFont()
+
+  const originalModel = monaco.editor.createModel(options.originalValue, 'markdown')
+  const modifiedModel = monaco.editor.createModel(options.modifiedValue, 'markdown')
+  const editor = monaco.editor.createDiffEditor(element, {
+    ...createEditorOptions(),
+    originalEditable: false,
+    renderSideBySide: true,
+    enableSplitViewResizing: true,
+  })
+  const modifiedEditor = editor.getModifiedEditor()
+
+  editor.setModel({
+    original: originalModel,
+    modified: modifiedModel,
+  })
+
+  void ensureMonaspaceFont().then(() => {
+    monaco.editor.remeasureFonts()
+    editor.layout()
+  })
+
+  modifiedEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+    options.onSave()
+  })
+
+  modifiedModel.onDidChangeContent(() => {
+    if (isApplyingValue) {
+      return
+    }
+
+    options.onChange(modifiedModel.getValue())
+  })
+
+  return {
+    getValue() {
+      return modifiedModel.getValue()
+    },
+    setValue(value) {
+      if (modifiedModel.getValue() === value) {
+        return
+      }
+
+      isApplyingValue = true
+      modifiedModel.setValue(value)
+      isApplyingValue = false
+    },
+    focus() {
+      modifiedEditor.focus()
+    },
+    dispose() {
+      editor.dispose()
+      originalModel.dispose()
+      modifiedModel.dispose()
     },
   }
 }

@@ -60,6 +60,7 @@ export function createApp() {
     return c.json(
       v.parse(SyncResponseSchema, {
         files: listFiles(user.id),
+        conflicts: [],
       }),
     )
   })
@@ -67,9 +68,9 @@ export function createApp() {
   app.post('/api/sync/push', async (c) => {
     const body = v.parse(PushRequestSchema, await c.req.json())
     const user = getCurrentUser()
-    const files = applyChanges(user.id, body.changes)
+    const result = applyChanges(user.id, body.changes)
 
-    return c.json(v.parse(SyncResponseSchema, { files }))
+    return c.json(v.parse(SyncResponseSchema, result))
   })
 
   app.onError((error, c) => {

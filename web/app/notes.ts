@@ -1,11 +1,33 @@
-import { ensureMarkdownExtension, getParentPath, joinNotePath, normalizeEntryName, normalizeRelativeCreatePath } from '../notes/paths.ts'
-import type { AppSettings } from '../schemas.ts'
-import type { ListedEntry, NoteStorage } from '../storage/types.ts'
+import {
+  ensureMarkdownExtension,
+  getParentPath,
+  joinNotePath,
+  normalizeEntryName,
+  normalizeRelativeCreatePath,
+} from '#web/notes/paths.ts'
+import type { AppSettings } from '#web/schemas.ts'
+import type { ListedEntry, NoteStorage, StoredFile } from '#web/storage/types.ts'
+
+export type NoteConflict = {
+  path: string
+  preferredMode: 'popover' | 'diff'
+  draftContent: string
+  diskFile: StoredFile | null
+  loadedSnapshot: StoredFile | null
+  source: 'local' | 'remote'
+}
+
+export type SaveCurrentNoteResult =
+  | { status: 'unchanged' }
+  | { status: 'saved'; file: StoredFile }
+  | { status: 'reloaded' }
+  | { status: 'conflict'; conflict: NoteConflict }
 
 export type NoteContext = {
   storage(): NoteStorage | null
   entries(): ListedEntry[]
   currentPath(): string | null
+  noteConflict(): NoteConflict | null
   setCurrentPath(path: string | null): void
   draftContent(): string
   setDraftContent(content: string): void
@@ -14,6 +36,45 @@ export type NoteContext = {
   setEntries(entries: ListedEntry[]): void
   setErrorMessage(message: string | null): void
   setEditorValue(value: string): void
+  loadedFileSnapshot(): StoredFile | null
+  setLoadedFileSnapshot(file: StoredFile | null): void
+  setNoteConflict(conflict: NoteConflict | null): void
+}
+
+function isSameStoredFile(left: StoredFile | null, right: StoredFile | null): boolean {
+  if (left === null || right === null) {
+    return left === right
+  }
+
+  return left.path === right.path && left.contentHash === right.contentHash
+}
+
+async function applyLoadedFile(context: NoteContext, file: StoredFile): Promise<void> {
+  context.setCurrentPath(file.path)
+  context.setDraftContent(file.content)
+  context.setEditorValue(file.content)
+  context.setLoadedFileSnapshot(file)
+  await context.saveSettings({
+    ...context.settings(),
+    lastOpenedPath: file.path,
+  })
+}
+
+function clearLoadedFile(context: NoteContext) {
+  context.setCurrentPath(null)
+  context.setDraftContent('')
+  context.setEditorValue('')
+  context.setLoadedFileSnapshot(null)
+}
+
+function clearConflictForPath(context: NoteContext, path: string | null) {
+  if (path === null) {
+    return
+  }
+
+  if (context.noteConflict()?.path === path) {
+    context.setNoteConflict(null)
+  }
 }
 
 function pickOpenPath(
@@ -35,9 +96,7 @@ export async function loadNote(context: NoteContext, path: string | null): Promi
   const currentStorage = context.storage()
 
   if (currentStorage === null || path === null) {
-    context.setCurrentPath(null)
-    context.setDraftContent('')
-    context.setEditorValue('')
+    clearLoadedFile(context)
     return
   }
 
@@ -48,13 +107,7 @@ export async function loadNote(context: NoteContext, path: string | null): Promi
     return
   }
 
-  context.setCurrentPath(file.path)
-  context.setDraftContent(file.content)
-  context.setEditorValue(file.content)
-  await context.saveSettings({
-    ...context.settings(),
-    lastOpenedPath: file.path,
-  })
+  await applyLoadedFile(context, file)
 }
 
 export async function refreshWorkspace(context: NoteContext, preferredPath: string | null): Promise<void> {
@@ -69,15 +122,73 @@ export async function refreshWorkspace(context: NoteContext, preferredPath: stri
   await loadNote(context, pickOpenPath(nextEntries, context.currentPath(), preferredPath))
 }
 
-export async function saveCurrentNote(context: NoteContext): Promise<void> {
+export async function saveCurrentNote(context: NoteContext): Promise<SaveCurrentNoteResult> {
   const currentStorage = context.storage()
   const path = context.currentPath()
 
   if (currentStorage === null || path === null) {
-    return
+    return { status: 'unchanged' }
   }
 
-  await currentStorage.writeTextFile(path, context.draftContent())
+  const draftContent = context.draftContent()
+  const loadedSnapshot = context.loadedFileSnapshot()
+  const diskFile = await currentStorage.readTextFile(path)
+
+  if (loadedSnapshot !== null && isSameStoredFile(diskFile, loadedSnapshot)) {
+    if (draftContent === loadedSnapshot.content) {
+      clearConflictForPath(context, path)
+      return { status: 'unchanged' }
+    }
+
+    const file = await currentStorage.writeTextFile(path, draftContent)
+    context.setLoadedFileSnapshot(file)
+    clearConflictForPath(context, path)
+    return { status: 'saved', file }
+  }
+
+  if (loadedSnapshot !== null && draftContent === loadedSnapshot.content) {
+    clearConflictForPath(context, path)
+
+    if (diskFile === null) {
+      await refreshWorkspace(context, null)
+      return { status: 'reloaded' }
+    }
+
+    await applyLoadedFile(context, diskFile)
+    return { status: 'reloaded' }
+  }
+
+  if (loadedSnapshot === null) {
+    if (diskFile !== null && draftContent === diskFile.content) {
+      context.setLoadedFileSnapshot(diskFile)
+      clearConflictForPath(context, path)
+      return { status: 'unchanged' }
+    }
+
+    if (diskFile === null) {
+      if (draftContent.length === 0) {
+        clearConflictForPath(context, path)
+        return { status: 'unchanged' }
+      }
+
+      const file = await currentStorage.writeTextFile(path, draftContent)
+      context.setLoadedFileSnapshot(file)
+      clearConflictForPath(context, path)
+      return { status: 'saved', file }
+    }
+  }
+
+  const conflict: NoteConflict = {
+    path,
+    preferredMode: 'popover',
+    draftContent,
+    diskFile,
+    loadedSnapshot,
+    source: 'local',
+  }
+
+  context.setNoteConflict(conflict)
+  return { status: 'conflict', conflict }
 }
 
 function getCreateErrorMessage(kind: ListedEntry['kind']): string {

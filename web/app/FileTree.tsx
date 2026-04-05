@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createSignal, onMount } from 'solid-js'
 import type { TreeNode } from '#web/notes/tree.ts'
+import { ConflictActions, type ConflictActionLabels } from './ConflictActions.tsx'
 import { Codicon } from './Codicon.tsx'
 import './FileTree.css'
 
@@ -141,17 +142,120 @@ function CreateRow(props: {
   )
 }
 
+function conflictLabels(conflict: { labels: ConflictActionLabels; path: string } | null): ConflictActionLabels {
+  return (
+    conflict?.labels ?? {
+      acceptTheirs: 'Accept file version',
+      resolveInDiff: 'Resolve conflicting changes',
+      saveMine: 'Save my current draft',
+      saveMineSeparately: 'Save my current draft separately',
+    }
+  )
+}
+
+function FileNodeRow(props: {
+  conflict: { labels: ConflictActionLabels; path: string } | null
+  currentPath: string | null
+  node: TreeNode
+  onAcceptTheirs(): void
+  onDelete(path: string, kind: TreeNode['kind']): void
+  onOpen(path: string): void
+  onOpenConflict(path: string): void
+  onResolveInDiff(): void
+  onSaveMine(): void
+  onSaveMineSeparately(): void
+  onStartRename(path: string, kind: TreeNode['kind'], name: string): void
+}) {
+  const hasConflict = () => props.conflict?.path === props.node.path
+  const popoverId = `tree-conflict-${props.node.path.replaceAll('/', '--')}`
+  let wasFocusedOnMouseDown = false
+
+  return (
+    <div class="tree-row">
+      <button
+        classList={{ 'tree-entry': true, 'tree-entry-conflict': hasConflict() }}
+        aria-current={props.currentPath === props.node.path ? 'true' : undefined}
+        popovertarget={hasConflict() ? popoverId : undefined}
+        type="button"
+        onMouseDown={(event) => {
+          wasFocusedOnMouseDown = document.activeElement === event.currentTarget
+        }}
+        onClick={() => {
+          if (hasConflict()) {
+            props.onOpenConflict(props.node.path)
+            return
+          }
+
+          if (wasFocusedOnMouseDown && props.currentPath === props.node.path) {
+            props.onStartRename(props.node.path, props.node.kind, props.node.name)
+            return
+          }
+
+          props.onOpen(props.node.path)
+        }}
+      >
+        <Codicon name="file" />
+        <span>{props.node.name}</span>
+        <Show when={hasConflict()}>
+          <Codicon name="alert" />
+        </Show>
+      </button>
+      <Show when={hasConflict()}>
+        <div id={popoverId} class="tree-conflict-popover" popover="auto">
+          <ConflictActions
+            labels={conflictLabels(props.conflict)}
+            popoverId={popoverId}
+            onAcceptTheirs={props.onAcceptTheirs}
+            onResolveInDiff={props.onResolveInDiff}
+            onSaveMine={props.onSaveMine}
+            onSaveMineSeparately={props.onSaveMineSeparately}
+          />
+        </div>
+      </Show>
+      <div class="tree-actions">
+        <button
+          type="button"
+          aria-label={`Rename ${props.node.path}`}
+          title="Rename note"
+          onClick={() => {
+            props.onStartRename(props.node.path, props.node.kind, props.node.name)
+          }}
+        >
+          <Codicon name="rename" />
+        </button>
+        <button
+          class="tree-action-delete"
+          type="button"
+          aria-label={`Delete ${props.node.path}`}
+          title="Delete note"
+          onClick={() => {
+            props.onDelete(props.node.path, props.node.kind)
+          }}
+        >
+          <Codicon name="trash" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function DirectoryNode(props: {
+  conflict: { labels: ConflictActionLabels; path: string } | null
   currentPath: string | null
   node: TreeNode
   pendingCreation: PendingCreation | null
   pendingRename: PendingRename | null
+  onAcceptTheirs(): void
   onCancelAction(): void
   onCreateFolder(path: string): void
   onCreateNote(path: string): void
   onDelete(path: string, kind: TreeNode['kind']): void
-  onStartRename(path: string, kind: TreeNode['kind'], name: string): void
   onOpen(path: string): void
+  onOpenConflict(path: string): void
+  onResolveInDiff(): void
+  onSaveMine(): void
+  onSaveMineSeparately(): void
+  onStartRename(path: string, kind: TreeNode['kind'], name: string): void
   onSubmitCreation(name: string): Promise<string | null>
   onSubmitRename(name: string): Promise<string | null>
 }) {
@@ -248,17 +352,23 @@ function DirectoryNode(props: {
       </Show>
       <Show when={isOpen()}>
         <FileTree
+          conflict={props.conflict}
           currentPath={props.currentPath}
           parentPath={props.node.path}
           nodes={props.node.children}
+          onAcceptTheirs={props.onAcceptTheirs}
           pendingCreation={props.pendingCreation}
           pendingRename={props.pendingRename}
           onCancelAction={props.onCancelAction}
           onCreateFolder={props.onCreateFolder}
           onCreateNote={props.onCreateNote}
           onDelete={props.onDelete}
-          onStartRename={props.onStartRename}
           onOpen={props.onOpen}
+          onOpenConflict={props.onOpenConflict}
+          onResolveInDiff={props.onResolveInDiff}
+          onSaveMine={props.onSaveMine}
+          onSaveMineSeparately={props.onSaveMineSeparately}
+          onStartRename={props.onStartRename}
           onSubmitCreation={props.onSubmitCreation}
           onSubmitRename={props.onSubmitRename}
         />
@@ -268,17 +378,23 @@ function DirectoryNode(props: {
 }
 
 export function FileTree(props: {
+  conflict: { labels: ConflictActionLabels; path: string } | null
   currentPath: string | null
   parentPath: string | null
   nodes: TreeNode[]
+  onAcceptTheirs(): void
   pendingCreation: PendingCreation | null
   pendingRename: PendingRename | null
   onCancelAction(): void
   onCreateFolder(path: string): void
   onCreateNote(path: string): void
   onDelete(path: string, kind: TreeNode['kind']): void
-  onStartRename(path: string, kind: TreeNode['kind'], name: string): void
   onOpen(path: string): void
+  onOpenConflict(path: string): void
+  onResolveInDiff(): void
+  onSaveMine(): void
+  onSaveMineSeparately(): void
+  onStartRename(path: string, kind: TreeNode['kind'], name: string): void
   onSubmitCreation(name: string): Promise<string | null>
   onSubmitRename(name: string): Promise<string | null>
 }) {
@@ -292,91 +408,56 @@ export function FileTree(props: {
         )}
       </Show>
       <For each={props.nodes}>
-        {(node) => {
-          let wasFocusedOnMouseDown = false
-
-          return (
-            <li>
-              {node.kind === 'directory' ? (
-                <DirectoryNode
-                  currentPath={props.currentPath}
-                  node={node}
-                  pendingCreation={props.pendingCreation}
-                  pendingRename={props.pendingRename}
-                  onCancelAction={props.onCancelAction}
-                  onCreateFolder={props.onCreateFolder}
-                  onCreateNote={props.onCreateNote}
-                  onDelete={props.onDelete}
-                  onStartRename={props.onStartRename}
-                  onOpen={props.onOpen}
-                  onSubmitCreation={props.onSubmitCreation}
-                  onSubmitRename={props.onSubmitRename}
-                />
-              ) : (
-                <Show
-                  when={props.pendingRename?.path === node.path ? props.pendingRename : null}
-                  keyed
-                  fallback={
-                    <div class="tree-row">
-                      <button
-                        class="tree-entry"
-                        aria-current={props.currentPath === node.path ? 'true' : undefined}
-                        type="button"
-                        onMouseDown={(event) => {
-                          wasFocusedOnMouseDown = document.activeElement === event.currentTarget
-                        }}
-                        onClick={() => {
-                          if (wasFocusedOnMouseDown && props.currentPath === node.path) {
-                            props.onStartRename(node.path, node.kind, node.name)
-                            return
-                          }
-
-                          props.onOpen(node.path)
-                        }}
-                      >
-                        <Codicon name="file" />
-                        <span>{node.name}</span>
-                      </button>
-                      <div class="tree-actions">
-                        <button
-                          type="button"
-                          aria-label={`Rename ${node.path}`}
-                          title="Rename note"
-                          onClick={() => {
-                            props.onStartRename(node.path, node.kind, node.name)
-                          }}
-                        >
-                          <Codicon name="rename" />
-                        </button>
-                        <button
-                          class="tree-action-delete"
-                          type="button"
-                          aria-label={`Delete ${node.path}`}
-                          title="Delete note"
-                          onClick={() => {
-                            props.onDelete(node.path, node.kind)
-                          }}
-                        >
-                          <Codicon name="trash" />
-                        </button>
-                      </div>
-                    </div>
-                  }
-                >
-                  {(pendingRename) => (
-                    <EntryEditorRow
-                      kind={pendingRename.kind}
-                      initialValue={pendingRename.name}
-                      initialSelection={pendingRename.kind === 'file' ? 'basename' : 'all'}
-                      onCancel={props.onCancelAction}
-                      onSubmit={props.onSubmitRename}
-                    />
-                  )}
-                </Show>
-              )}
-            </li>
-          )
-        }}
+        {(node) => (
+          <li>
+            {node.kind === 'directory' ? (
+              <DirectoryNode
+                conflict={props.conflict}
+                currentPath={props.currentPath}
+                node={node}
+                onAcceptTheirs={props.onAcceptTheirs}
+                pendingCreation={props.pendingCreation}
+                pendingRename={props.pendingRename}
+                onCancelAction={props.onCancelAction}
+                onCreateFolder={props.onCreateFolder}
+                onCreateNote={props.onCreateNote}
+                onDelete={props.onDelete}
+                onOpen={props.onOpen}
+                onOpenConflict={props.onOpenConflict}
+                onResolveInDiff={props.onResolveInDiff}
+                onSaveMine={props.onSaveMine}
+                onSaveMineSeparately={props.onSaveMineSeparately}
+                onStartRename={props.onStartRename}
+                onSubmitCreation={props.onSubmitCreation}
+                onSubmitRename={props.onSubmitRename}
+              />
+            ) : (
+              <Show when={props.pendingRename?.path === node.path ? props.pendingRename : null} keyed fallback={<FileNodeRow
+                conflict={props.conflict}
+                currentPath={props.currentPath}
+                node={node}
+                onAcceptTheirs={props.onAcceptTheirs}
+                onDelete={props.onDelete}
+                onOpen={props.onOpen}
+                onOpenConflict={props.onOpenConflict}
+                onResolveInDiff={props.onResolveInDiff}
+                onSaveMine={props.onSaveMine}
+                onSaveMineSeparately={props.onSaveMineSeparately}
+                onStartRename={props.onStartRename}
+              />}>
+                {(pendingRename) => (
+                  <EntryEditorRow
+                    kind={pendingRename.kind}
+                    initialValue={pendingRename.name}
+                    initialSelection={pendingRename.kind === 'file' ? 'basename' : 'all'}
+                    onCancel={props.onCancelAction}
+                    onSubmit={props.onSubmitRename}
+                  />
+                )}
+              </Show>
+            )}
+          </li>
+        )}
       </For>
     </ul>
   )

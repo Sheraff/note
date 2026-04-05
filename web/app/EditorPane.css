@@ -15,6 +15,10 @@
   inset: 0;
 }
 
+.surface-with-toolbar {
+  top: 4.75rem;
+}
+
 .editor-empty {
   position: absolute;
   inset: 0;
@@ -30,6 +34,45 @@
     font-size: 1rem;
     text-align: center;
   }
+}
+
+.editor-diff-actions {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(7, 10, 17, 0.92);
+  backdrop-filter: blur(10px);
+
+  > div:first-child {
+    display: grid;
+    gap: 0.2rem;
+    min-width: 0;
+  }
+
+  strong {
+    font-size: 0.95rem;
+  }
+
+  span {
+    min-width: 0;
+    color: #94a3b8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+.editor-diff-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.6rem;
 }
 
 .editor-empty-panel {
@@ -67,6 +110,10 @@
 }
 
 @media (max-width: 720px) {
+  .surface-with-toolbar {
+    top: 9.5rem;
+  }
+
   .editor-empty-panel {
     width: 100%;
   }
@@ -77,5 +124,19 @@
     > button {
       width: 100%;
     }
+  }
+
+  .editor-diff-action-buttons {
+    flex-direction: column;
+
+    > button {
+      width: 100%;
+      justify-content: center;
+    }
+  }
+
+  .editor-diff-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

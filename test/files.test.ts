@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { createConflictCopyPath, normalizeNotePath } from '../server/files.ts'
-import { ensureMarkdownExtension, joinNotePath, normalizeEntryName, normalizeRelativeCreatePath } from '../web/notes/paths.ts'
+import {
+  createConflictCopyPath as createClientConflictCopyPath,
+  ensureMarkdownExtension,
+  joinNotePath,
+  normalizeEntryName,
+  normalizeRelativeCreatePath,
+} from '../web/notes/paths.ts'
 import { buildTree } from '../web/notes/tree.ts'
 
 describe('note paths', () => {
@@ -32,6 +38,9 @@ describe('note paths', () => {
 
   it('creates filesystem-safe conflict file names', () => {
     expect(createConflictCopyPath('notes/today.md', '2026-04-03T09:10:11.000Z')).toBe(
+      'notes/today.conflict-2026-04-03T09-10-11-000Z.md',
+    )
+    expect(createClientConflictCopyPath('notes/today.md', '2026-04-03T09:10:11.000Z')).toBe(
       'notes/today.conflict-2026-04-03T09-10-11-000Z.md',
     )
   })

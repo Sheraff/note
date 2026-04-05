@@ -2,24 +2,40 @@ import { createMemo, createSignal, onCleanup, onMount, type JSX } from 'solid-js
 import { EditorPane } from './app/EditorPane.tsx'
 import { NotesSidebar } from './app/NotesSidebar.tsx'
 import { StatusBar } from './app/StatusBar.tsx'
+import type { ConflictActionLabels } from './app/ConflictActions.tsx'
 import {
   createFolder,
   createNote,
   deleteEntry,
   loadNote,
-  renameEntry,
   refreshWorkspace,
+  renameEntry,
   saveCurrentNote,
+  type NoteConflict,
   type NoteContext,
+  type SaveCurrentNoteResult,
 } from './app/notes.ts'
 import { attachFolder, bootstrapWorkspace, reconnectFolder, switchToOpfs, type StorageContext } from './app/storage.ts'
-import { createSyncRequester, syncNow, type SyncContext } from './app/sync.ts'
+import {
+  createSyncRequester,
+  syncNow,
+  type FlushPendingSaveResult,
+  type SyncContext,
+} from './app/sync.ts'
 import type { MonacoController } from './editor/monaco.ts'
+import { createConflictCopyPath } from './notes/paths.ts'
 import { buildTree } from './notes/tree.ts'
 import { DEFAULT_APP_SETTINGS, type AppSettings, type SyncState } from './schemas.ts'
 import { setAppSettings } from './storage/metadata.ts'
-import type { ListedEntry, NoteStorage } from './storage/types.ts'
+import type { ListedEntry, NoteStorage, StoredFile } from './storage/types.ts'
 import './App.css'
+
+const AUTO_SYNC_COOLDOWN_MS = 10_000
+const AUTO_SYNC_INTERVAL_MS = 60_000
+const ACTIVE_CONFLICT_MESSAGE = 'Resolve the open note conflict before continuing.'
+
+type EditorMode = 'plain' | 'diff'
+type PersistResult = SaveCurrentNoteResult | FlushPendingSaveResult
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -29,10 +45,21 @@ function getErrorMessage(error: unknown): string {
   return 'Unknown error'
 }
 
+function shouldSyncAfterSaveResult(result: PersistResult): boolean {
+  return result.status === 'saved' || result.status === 'reloaded'
+}
+
+function isSaveBlockedByConflict(result: PersistResult): boolean {
+  return result.status === 'conflict'
+}
+
 function App() {
   let editorElement: HTMLDivElement | undefined
   let editor: MonacoController | undefined
+  let editorMode: EditorMode = 'plain'
   let saveTimeout: number | undefined
+  let autoSyncInterval: number | undefined
+  let lastAutoSyncAt = 0
 
   const [sidebarWidth, setSidebarWidth] = createSignal(300)
 
@@ -46,9 +73,27 @@ function App() {
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
   const [syncState, setSyncStateSignal] = createSignal<SyncState>({ files: [], lastSyncedAt: null })
   const [isSyncing, setIsSyncing] = createSignal(false)
+  const [loadedFileSnapshot, setLoadedFileSnapshot] = createSignal<StoredFile | null>(null)
+  const [noteConflictSignal, setNoteConflictSignal] = createSignal<NoteConflict | null>(null)
+  const [isDiffMode, setIsDiffMode] = createSignal(false)
+  const [hasUnsyncedWorkspaceChanges, setHasUnsyncedWorkspaceChanges] = createSignal(false)
 
   const tree = createMemo(() => buildTree(entries()))
   const fileCount = createMemo(() => entries().filter((entry) => entry.kind === 'file').length)
+  const hasUnsavedDraftChanges = createMemo(() => {
+    if (currentPath() === null) {
+      return false
+    }
+
+    const snapshot = loadedFileSnapshot()
+
+    if (snapshot === null) {
+      return draftContent().length > 0
+    }
+
+    return draftContent() !== snapshot.content
+  })
+  const hasKnownLocalChangesSinceSync = createMemo(() => hasUnsyncedWorkspaceChanges() || hasUnsavedDraftChanges())
   const storageLabel = createMemo(() => {
     const currentStorage = storage()
 
@@ -78,9 +123,78 @@ function App() {
     return 'Create a note to start writing.'
   })
   const isOpfsActive = createMemo(() => settings().backend === 'opfs')
+  const conflictSummary = createMemo(() => {
+    const conflict = noteConflictSignal()
+
+    if (conflict === null) {
+      return null
+    }
+
+    const acceptTheirs =
+      conflict.source === 'remote'
+        ? conflict.diskFile === null
+          ? 'Accept cloud deletion'
+          : 'Accept cloud version'
+        : conflict.diskFile === null
+          ? 'Accept file deletion'
+          : 'Accept file version'
+
+    const message =
+      conflict.source === 'remote'
+        ? `Cloud conflict: ${conflict.path}`
+        : `File conflict: ${conflict.path}`
+
+    return {
+      labels: {
+        acceptTheirs,
+        resolveInDiff: 'Resolve conflicting changes',
+        saveMine: 'Save my current draft',
+        saveMineSeparately: 'Save my current draft separately',
+      } satisfies ConflictActionLabels,
+      message,
+      path: conflict.path,
+      diskFileExists: conflict.diskFile !== null,
+    }
+  })
 
   function reportError(error: unknown) {
     setErrorMessage(getErrorMessage(error))
+  }
+
+  function setNoteConflict(nextConflict: NoteConflict | null) {
+    setNoteConflictSignal(nextConflict)
+
+    if (nextConflict === null && isDiffMode()) {
+      setIsDiffMode(false)
+      void mountEditor('plain').catch(reportError)
+    }
+  }
+
+  function noteConflict() {
+    return noteConflictSignal()
+  }
+
+  function updateNoteConflict(updater: (conflict: NoteConflict) => NoteConflict) {
+    const conflict = noteConflict()
+
+    if (conflict === null) {
+      return
+    }
+
+    setNoteConflictSignal(updater(conflict))
+  }
+
+  function syncConflictDraft(value: string) {
+    const conflict = noteConflict()
+
+    if (conflict === null || conflict.path !== currentPath()) {
+      return
+    }
+
+    setNoteConflictSignal({
+      ...conflict,
+      draftContent: value,
+    })
   }
 
   async function saveSettings(nextSettings: AppSettings) {
@@ -88,10 +202,75 @@ function App() {
     await setAppSettings(nextSettings)
   }
 
+  function trackSaveResult(result: PersistResult) {
+    if (result.status === 'saved' || result.status === 'reloaded') {
+      setHasUnsyncedWorkspaceChanges(true)
+    }
+  }
+
+  async function mountEditor(mode: EditorMode = 'plain') {
+    if (editorElement === undefined) {
+      return
+    }
+
+    const nextMode = mode === 'diff' && noteConflict() !== null ? 'diff' : 'plain'
+
+    if (editor !== undefined && editorMode === nextMode) {
+      editor.setValue(draftContent())
+      return
+    }
+
+    editor?.dispose()
+    editor = undefined
+
+    const monaco = await import('./editor/monaco.ts')
+
+    if (nextMode === 'diff') {
+      const conflict = noteConflict()
+
+      if (conflict === null) {
+        editorMode = 'plain'
+        await mountEditor('plain')
+        return
+      }
+
+      editor = monaco.createMonacoDiffEditor(editorElement, {
+        originalValue: conflict.diskFile?.content ?? '',
+        modifiedValue: draftContent(),
+        onChange(value) {
+          setDraftContent(value)
+          syncConflictDraft(value)
+        },
+        onSave() {
+          void handleSaveResolvedVersion().catch(reportError)
+        },
+      })
+      editorMode = 'diff'
+      return
+    }
+
+    editor = monaco.createMonacoEditor(editorElement, {
+      initialValue: draftContent(),
+      onChange(value) {
+        setDraftContent(value)
+        syncConflictDraft(value)
+
+        if (noteConflict()?.path !== currentPath()) {
+          scheduleSave()
+        }
+      },
+      onSave() {
+        void saveAndSyncCurrentNote().catch(reportError)
+      },
+    })
+    editorMode = 'plain'
+  }
+
   const noteContext: NoteContext = {
     storage,
     entries,
     currentPath,
+    noteConflict,
     setCurrentPath,
     draftContent,
     setDraftContent,
@@ -102,6 +281,9 @@ function App() {
     setEditorValue(value) {
       editor?.setValue(value)
     },
+    loadedFileSnapshot,
+    setLoadedFileSnapshot,
+    setNoteConflict,
   }
 
   const storageContext: StorageContext = {
@@ -126,7 +308,10 @@ function App() {
     currentPath,
     setSyncState: setSyncStateSignal,
     setIsSyncing,
+    hasKnownLocalChangesSinceSync,
+    setHasKnownLocalChangesSinceSync: setHasUnsyncedWorkspaceChanges,
     setErrorMessage,
+    setNoteConflict,
     flushPendingSave,
     refreshWorkspace(preferredPath) {
       return refreshWorkspace(noteContext, preferredPath)
@@ -150,10 +335,47 @@ function App() {
     return true
   }
 
+  async function reopenConflictNote(path: string) {
+    const conflict = noteConflict()
+
+    if (conflict === null || conflict.path !== path) {
+      await loadNote(noteContext, path)
+      return
+    }
+
+    clearPendingSave()
+    setErrorMessage(null)
+    setCurrentPath(conflict.path)
+    setDraftContent(conflict.draftContent)
+    editor?.setValue(conflict.draftContent)
+    setLoadedFileSnapshot(conflict.loadedSnapshot)
+    await saveSettings({
+      ...settings(),
+      lastOpenedPath: conflict.path,
+    })
+
+    if (conflict.preferredMode === 'diff') {
+      setIsDiffMode(true)
+      await mountEditor('diff')
+    } else {
+      setIsDiffMode(false)
+      await mountEditor('plain')
+    }
+
+    editor?.focus()
+  }
+
   async function saveAndSyncCurrentNote() {
     clearPendingSave()
-    await saveCurrentNote(noteContext)
-    await requestSync({ skipPendingSave: true })
+
+    const saveResult = await saveCurrentNote(noteContext)
+    trackSaveResult(saveResult)
+
+    if (!shouldSyncAfterSaveResult(saveResult)) {
+      return
+    }
+
+    await requestSync({ mode: 'full', skipPendingSave: true })
   }
 
   function scheduleSave() {
@@ -165,43 +387,173 @@ function App() {
     }, 400)
   }
 
-  async function flushPendingSave(options: { force?: boolean } = {}): Promise<boolean> {
+  async function flushPendingSave(options: { force?: boolean } = {}): Promise<FlushPendingSaveResult> {
     const hadPendingSave = clearPendingSave()
 
     if (!hadPendingSave && options.force !== true) {
+      return { status: 'skipped' }
+    }
+
+    const saveResult = await saveCurrentNote(noteContext)
+    trackSaveResult(saveResult)
+    return saveResult
+  }
+
+  async function prepareForStorageChange(): Promise<boolean> {
+    if (storage() === null) {
+      return true
+    }
+
+    const saveResult = await flushPendingSave({ force: true })
+
+    if (isSaveBlockedByConflict(saveResult)) {
       return false
     }
 
-    await saveCurrentNote(noteContext)
+    if (hasKnownLocalChangesSinceSync()) {
+      await requestSync({ mode: 'full', skipPendingSave: true })
+    }
+
     return true
   }
 
-  async function mountEditor() {
-    if (editor !== undefined || editorElement === undefined) {
+  async function findAvailableConflictCopyPath(path: string): Promise<string> {
+    const currentStorage = storage()
+
+    if (currentStorage === null) {
+      throw new Error('Storage is not ready yet.')
+    }
+
+    const timestamp = new Date().toISOString()
+
+    for (let attempt = 0; ; attempt += 1) {
+      const candidate = createConflictCopyPath(path, timestamp, attempt)
+
+      if ((await currentStorage.readTextFile(candidate)) === null) {
+        return candidate
+      }
+    }
+  }
+
+  async function overwriteConflictWithDraft() {
+    const currentStorage = storage()
+    const conflict = noteConflict()
+
+    if (currentStorage === null || conflict === null) {
       return
     }
 
-    const monaco = await import('./editor/monaco.ts')
+    setErrorMessage(null)
+    await currentStorage.writeTextFile(conflict.path, conflict.draftContent)
+    setHasUnsyncedWorkspaceChanges(true)
+    setNoteConflict(null)
+    await loadNote(noteContext, conflict.path)
+    await requestSync({ mode: 'full', skipPendingSave: true })
+  }
 
-    editor = monaco.createMonacoEditor(editorElement, {
-      initialValue: draftContent(),
-      onChange(value) {
-        setDraftContent(value)
-        scheduleSave()
-      },
-      onSave() {
-        void saveAndSyncCurrentNote().catch(reportError)
-      },
-    })
+  async function restoreConflictFromDisk() {
+    const currentStorage = storage()
+    const conflict = noteConflict()
+
+    if (currentStorage === null || conflict === null) {
+      return
+    }
+
+    setErrorMessage(null)
+    setHasUnsyncedWorkspaceChanges(true)
+
+    if (conflict.diskFile !== null) {
+      await currentStorage.writeTextFile(conflict.path, conflict.diskFile.content)
+      setNoteConflict(null)
+      await loadNote(noteContext, conflict.path)
+      return
+    }
+
+    await currentStorage.deleteEntry(conflict.path)
+    setNoteConflict(null)
+    await refreshWorkspace(noteContext, null)
+  }
+
+  async function saveConflictDraftAsCopy() {
+    const currentStorage = storage()
+    const conflict = noteConflict()
+
+    if (currentStorage === null || conflict === null) {
+      return
+    }
+
+    setErrorMessage(null)
+
+    const copyPath = await findAvailableConflictCopyPath(conflict.path)
+
+    await currentStorage.writeTextFile(copyPath, conflict.draftContent)
+
+    if (conflict.diskFile !== null) {
+      await currentStorage.writeTextFile(conflict.path, conflict.diskFile.content)
+    } else {
+      await currentStorage.deleteEntry(conflict.path)
+    }
+
+    setHasUnsyncedWorkspaceChanges(true)
+    setNoteConflict(null)
+    await refreshWorkspace(noteContext, conflict.diskFile === null ? copyPath : conflict.path)
+    await requestSync({ mode: 'full', skipPendingSave: true })
+  }
+
+  async function handleOverwriteWithDraft() {
+    await overwriteConflictWithDraft()
+  }
+
+  async function handleRestoreFromDisk() {
+    await restoreConflictFromDisk()
+  }
+
+  async function handleSaveDraftAsCopy() {
+    await saveConflictDraftAsCopy()
+  }
+
+  async function handleOpenConflictDiff() {
+    const conflict = noteConflict()
+
+    if (conflict === null) {
+      return
+    }
+
+    setErrorMessage(null)
+    updateNoteConflict((conflict) => ({
+      ...conflict,
+      preferredMode: 'diff',
+    }))
+    await reopenConflictNote(conflict.path)
+  }
+
+  async function handleCancelConflictDiff() {
+    setIsDiffMode(false)
+    await mountEditor('plain')
+    editor?.focus()
+  }
+
+  async function handleSaveResolvedVersion() {
+    await overwriteConflictWithDraft()
+  }
+
+  async function handleSaveResolvedAsCopy() {
+    await saveConflictDraftAsCopy()
   }
 
   async function handleCreateNote(parentPath: string | null, name: string): Promise<string | null> {
     try {
-      const didSave = await flushPendingSave()
+      const saveResult = await flushPendingSave()
+
+      if (isSaveBlockedByConflict(saveResult)) {
+        return ACTIVE_CONFLICT_MESSAGE
+      }
+
       const message = await createNote(noteContext, parentPath, name)
 
-      if (didSave || message === null) {
-        await requestSync({ skipPendingSave: true })
+      if (shouldSyncAfterSaveResult(saveResult) || message === null) {
+        setHasUnsyncedWorkspaceChanges(true)
+        await requestSync({ mode: 'full', skipPendingSave: true })
       }
 
       return message
@@ -213,11 +565,17 @@ function App() {
 
   async function handleCreateFolder(parentPath: string | null, name: string): Promise<string | null> {
     try {
-      const didSave = await flushPendingSave()
+      const saveResult = await flushPendingSave()
+
+      if (isSaveBlockedByConflict(saveResult)) {
+        return ACTIVE_CONFLICT_MESSAGE
+      }
+
       const message = await createFolder(noteContext, parentPath, name)
 
-      if (didSave || message === null) {
-        await requestSync({ skipPendingSave: true })
+      if (shouldSyncAfterSaveResult(saveResult) || message === null) {
+        setHasUnsyncedWorkspaceChanges(true)
+        await requestSync({ mode: 'full', skipPendingSave: true })
       }
 
       return message
@@ -229,22 +587,34 @@ function App() {
 
   function handleDeleteEntry(path: string, kind: ListedEntry['kind']) {
     void (async () => {
-      const didSave = await flushPendingSave()
+      const saveResult = await flushPendingSave()
+
+      if (isSaveBlockedByConflict(saveResult)) {
+        return
+      }
+
       const didDelete = await deleteEntry(noteContext, { path, kind })
 
-      if (didSave || didDelete) {
-        await requestSync({ skipPendingSave: true })
+      if (shouldSyncAfterSaveResult(saveResult) || didDelete) {
+        setHasUnsyncedWorkspaceChanges(true)
+        await requestSync({ mode: 'full', skipPendingSave: true })
       }
     })().catch(reportError)
   }
 
   async function handleRenameEntry(path: string, kind: ListedEntry['kind'], name: string): Promise<string | null> {
     try {
-      const didSave = await flushPendingSave()
+      const saveResult = await flushPendingSave()
+
+      if (isSaveBlockedByConflict(saveResult)) {
+        return ACTIVE_CONFLICT_MESSAGE
+      }
+
       const message = await renameEntry(noteContext, { path, kind }, name)
 
-      if (didSave || message === null) {
-        await requestSync({ skipPendingSave: true })
+      if (shouldSyncAfterSaveResult(saveResult) || message === null) {
+        setHasUnsyncedWorkspaceChanges(true)
+        await requestSync({ mode: 'full', skipPendingSave: true })
       }
 
       return message
@@ -255,19 +625,69 @@ function App() {
   }
 
   function handleAttachFolder() {
-    void attachFolder(storageContext).catch(reportError)
+    void (async () => {
+      if (!(await prepareForStorageChange())) {
+        return
+      }
+
+      await attachFolder(storageContext)
+      await requestSync({ mode: 'full' })
+    })().catch(reportError)
   }
 
   function handleReconnectFolder() {
-    void reconnectFolder(storageContext).catch(reportError)
+    void (async () => {
+      if (!(await prepareForStorageChange())) {
+        return
+      }
+
+      await reconnectFolder(storageContext)
+      await requestSync({ mode: 'full' })
+    })().catch(reportError)
   }
 
   function handleSwitchToOpfs() {
-    void switchToOpfs(storageContext).catch(reportError)
+    void (async () => {
+      if (!(await prepareForStorageChange())) {
+        return
+      }
+
+      await switchToOpfs(storageContext)
+      await requestSync({ mode: 'full' })
+    })().catch(reportError)
   }
 
   function handleSync() {
-    void requestSync().catch(reportError)
+    void requestSync({ mode: 'full' }).catch(reportError)
+  }
+
+  function triggerAutoSync() {
+    if (storage() === null || noteConflict() !== null || document.visibilityState !== 'visible') {
+      return
+    }
+
+    const now = Date.now()
+
+    if (now - lastAutoSyncAt < AUTO_SYNC_COOLDOWN_MS) {
+      return
+    }
+
+    lastAutoSyncAt = now
+    void requestSync({ mode: 'precheck-if-clean' }).catch(reportError)
+  }
+
+  function handleVisibilityChange() {
+    if (document.visibilityState === 'visible') {
+      triggerAutoSync()
+    }
+  }
+
+  function handleWindowFocus() {
+    triggerAutoSync()
+  }
+
+  function handleWindowOnline() {
+    triggerAutoSync()
   }
 
   function handleResizeStart(event: MouseEvent) {
@@ -295,18 +715,53 @@ function App() {
 
   function handleOpenNote(path: string) {
     void (async () => {
-      const didSave = await flushPendingSave()
+      const conflict = noteConflict()
+
+      if (conflict !== null) {
+        if (path === conflict.path) {
+          await reopenConflictNote(path)
+          return
+        }
+
+        if (currentPath() === conflict.path) {
+          clearPendingSave()
+          setIsDiffMode(false)
+          await loadNote(noteContext, path)
+          await mountEditor('plain')
+          editor?.focus()
+          return
+        }
+      }
+
+      const saveResult = await flushPendingSave()
+
+      if (isSaveBlockedByConflict(saveResult)) {
+        return
+      }
+
       await loadNote(noteContext, path)
 
-      if (didSave) {
-        await requestSync({ skipPendingSave: true })
+      if (shouldSyncAfterSaveResult(saveResult)) {
+        await requestSync({ mode: 'full', skipPendingSave: true })
       }
     })().catch(reportError)
   }
 
   onMount(() => {
-    void mountEditor().catch(reportError)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('focus', handleWindowFocus)
+    window.addEventListener('online', handleWindowOnline)
+    autoSyncInterval = window.setInterval(() => {
+      triggerAutoSync()
+    }, AUTO_SYNC_INTERVAL_MS)
+
+    void mountEditor('plain').catch(reportError)
     void bootstrapWorkspace(storageContext)
+      .then(async () => {
+        if (storage() !== null) {
+          await requestSync({ mode: 'full' })
+        }
+      })
       .catch(reportError)
       .finally(() => {
         setHasBootstrapped(true)
@@ -314,8 +769,15 @@ function App() {
   })
 
   onCleanup(() => {
-    clearPendingSave()
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
+    window.removeEventListener('focus', handleWindowFocus)
+    window.removeEventListener('online', handleWindowOnline)
 
+    if (autoSyncInterval !== undefined) {
+      window.clearInterval(autoSyncInterval)
+    }
+
+    clearPendingSave()
     editor?.dispose()
   })
 
@@ -323,30 +785,55 @@ function App() {
     <div class="app">
       <main class="workspace" style={{ 'grid-template-columns': `${sidebarWidth()}px 0px 1fr` } as JSX.CSSProperties}>
         <NotesSidebar
+          conflict={conflictSummary()}
           currentPath={currentPath()}
           emptyMessage={emptyMessage()}
           fileCount={fileCount()}
           isReady={storage() !== null}
           nodes={tree()}
+          onAcceptTheirs={() => {
+            void handleRestoreFromDisk().catch(reportError)
+          }}
           onCreateFolder={handleCreateFolder}
           onCreateNote={handleCreateNote}
           onDeleteEntry={handleDeleteEntry}
           onOpen={handleOpenNote}
+          onOpenConflict={handleOpenNote}
           onRenameEntry={handleRenameEntry}
+          onResolveInDiff={() => {
+            void handleOpenConflictDiff().catch(reportError)
+          }}
+          onSaveMine={() => {
+            void handleOverwriteWithDraft().catch(reportError)
+          }}
+          onSaveMineSeparately={() => {
+            void handleSaveDraftAsCopy().catch(reportError)
+          }}
         />
         <div class="resize-handle" onMouseDown={handleResizeStart} />
         <EditorPane
           currentPath={currentPath()}
+          isDiffMode={isDiffMode()}
           reconnectableDirectoryName={reconnectableDirectoryName()}
           onAttachFolder={handleAttachFolder}
+          onCancelConflictDiff={() => {
+            void handleCancelConflictDiff().catch(reportError)
+          }}
           onEditorMount={(element) => {
             editorElement = element
           }}
           onReconnectFolder={handleReconnectFolder}
+          onSaveResolvedAsCopy={() => {
+            void handleSaveResolvedAsCopy().catch(reportError)
+          }}
+          onSaveResolvedVersion={() => {
+            void handleSaveResolvedVersion().catch(reportError)
+          }}
           onSwitchToOpfs={handleSwitchToOpfs}
         />
       </main>
       <StatusBar
+        conflict={conflictSummary()}
         errorMessage={errorMessage()}
         canReconnectFolder={reconnectableDirectoryName() !== null}
         canSync={storage() !== null}
@@ -355,8 +842,20 @@ function App() {
         lastSyncedAt={syncState().lastSyncedAt}
         reconnectLabel={reconnectableDirectoryName()}
         storageLabel={storageLabel()}
+        onAcceptTheirs={() => {
+          void handleRestoreFromDisk().catch(reportError)
+        }}
         onAttachFolder={handleAttachFolder}
         onReconnectFolder={handleReconnectFolder}
+        onResolveInDiff={() => {
+          void handleOpenConflictDiff().catch(reportError)
+        }}
+        onSaveMine={() => {
+          void handleOverwriteWithDraft().catch(reportError)
+        }}
+        onSaveMineSeparately={() => {
+          void handleSaveDraftAsCopy().catch(reportError)
+        }}
         onSync={handleSync}
         onSwitchToOpfs={handleSwitchToOpfs}
       />

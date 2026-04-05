@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
-import { comparePaths, createConflictCopyPath } from './files.ts'
+import { comparePaths } from './files.ts'
 import { listFiles, upsertFile } from './db.ts'
-import { type RemoteFile, type SyncBaseEntry, type SyncChange } from './schemas.ts'
+import { type RemoteFile, type SyncBaseEntry, type SyncChange, type SyncConflict } from './schemas.ts'
 
 function baseMatchesRemote(remote: RemoteFile | undefined, base: SyncBaseEntry | null): boolean {
   if (remote === undefined) {
@@ -44,32 +44,32 @@ function createDeletedFile(path: string, updatedAt: string): RemoteFile {
   }
 }
 
-function createUniqueConflictPath(filesByPath: Map<string, RemoteFile>, path: string, updatedAt: string): string {
-  let attempt = 0
-  let candidate = createConflictCopyPath(path, updatedAt, attempt)
-
-  while (filesByPath.has(candidate)) {
-    attempt += 1
-    candidate = createConflictCopyPath(path, updatedAt, attempt)
+function createSyncConflict(path: string, remote: RemoteFile | undefined): SyncConflict {
+  return {
+    path,
+    theirs: remote ?? null,
   }
-
-  return candidate
 }
 
-export function applyChangesToSnapshot(currentFiles: RemoteFile[], changes: SyncChange[]): RemoteFile[] {
+export function applyChangesToSnapshot(currentFiles: RemoteFile[], changes: SyncChange[]): {
+  files: RemoteFile[]
+  conflicts: SyncConflict[]
+} {
   const filesByPath = new Map(currentFiles.map((file) => [file.path, file]))
+  const conflicts: SyncConflict[] = []
 
   for (const change of changes) {
     const remote = filesByPath.get(change.path)
     const hasConflict = !baseMatchesRemote(remote, change.base)
 
     if (change.kind === 'upsert') {
-      if (hasConflict && remote !== undefined && remote.deletedAt === null) {
-        const conflictPath = createUniqueConflictPath(filesByPath, change.path, change.updatedAt)
-        filesByPath.set(conflictPath, {
-          ...remote,
-          path: conflictPath,
-        })
+      if (hasConflict && remote?.deletedAt === null && remote.contentHash === hashContent(change.content)) {
+        continue
+      }
+
+      if (hasConflict) {
+        conflicts.push(createSyncConflict(change.path, remote))
+        continue
       }
 
       filesByPath.set(change.path, createRemoteFile(change.path, change.content, change.updatedAt))
@@ -83,15 +83,21 @@ export function applyChangesToSnapshot(currentFiles: RemoteFile[], changes: Sync
     filesByPath.set(change.path, createDeletedFile(change.path, change.updatedAt))
   }
 
-  return [...filesByPath.values()].sort((left, right) => comparePaths(left.path, right.path))
+  return {
+    files: [...filesByPath.values()].sort((left, right) => comparePaths(left.path, right.path)),
+    conflicts,
+  }
 }
 
-export function applyChanges(userId: string, changes: SyncChange[]): RemoteFile[] {
+export function applyChanges(userId: string, changes: SyncChange[]): {
+  files: RemoteFile[]
+  conflicts: SyncConflict[]
+} {
   const before = listFiles(userId)
   const next = applyChangesToSnapshot(before, changes)
   const beforeByPath = new Map(before.map((file) => [file.path, file]))
 
-  for (const file of next) {
+  for (const file of next.files) {
     const previous = beforeByPath.get(file.path)
 
     if (

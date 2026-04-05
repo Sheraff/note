@@ -1,10 +1,55 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RemoteFile } from '../server/schemas.ts'
 import { applyChangesToSnapshot } from '../server/sync.ts'
-import { hashContent } from '../web/notes/hashes.ts'
-import { createSyncRequester } from '../web/app/sync.ts'
+import { createSyncRequester, syncNow, type FlushPendingSaveResult, type SyncContext, type SyncMode } from '../web/app/sync.ts'
 import { applyRemoteSnapshot, buildLocalChanges } from '../web/notes/sync.ts'
+import { hashContent } from '../web/notes/hashes.ts'
+import type { SyncState } from '../web/schemas.ts'
 import type { NoteStorage, StoredFile } from '../web/storage/types.ts'
+
+vi.mock('../web/storage/metadata.ts', () => ({
+  setSyncState: vi.fn(async () => {}),
+}))
+
+function createJsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  })
+}
+
+async function skipPendingSave(): Promise<FlushPendingSaveResult> {
+  return { status: 'skipped' }
+}
+
+function createSyncContext(options: {
+  currentPath?: string | null
+  flushPendingSave?: () => Promise<FlushPendingSaveResult>
+  hasKnownLocalChangesSinceSync?: boolean
+  storage: NoteStorage
+  syncState: SyncState
+}) {
+  return {
+    storage: () => options.storage,
+    syncState: () => options.syncState,
+    currentPath: () => options.currentPath ?? null,
+    setSyncState: vi.fn(),
+    setIsSyncing: vi.fn(),
+    hasKnownLocalChangesSinceSync: () => options.hasKnownLocalChangesSinceSync ?? false,
+    setHasKnownLocalChangesSinceSync: vi.fn(),
+    setErrorMessage: vi.fn(),
+    setNoteConflict: vi.fn(),
+    flushPendingSave: vi.fn(options.flushPendingSave ?? skipPendingSave),
+    refreshWorkspace: vi.fn(async () => {}),
+  } satisfies SyncContext
+}
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
 
 function createDeferred() {
   let resolve: (() => void) | undefined
@@ -79,7 +124,7 @@ function createMemoryStorage(initialFiles: StoredFile[]): NoteStorage {
 }
 
 describe('server sync conflicts', () => {
-  it('keeps the local version at the original path and copies the remote version', async () => {
+  it('keeps the remote version in place and returns a conflict to resolve', async () => {
     const remoteBefore = [await createRemoteFile('notes/today.md', 'remote version', '2026-04-03T10:00:00.000Z')]
     const next = applyChangesToSnapshot(remoteBefore, [
       {
@@ -96,11 +141,37 @@ describe('server sync conflicts', () => {
       },
     ])
 
-    const original = next.find((file) => file.path === 'notes/today.md')
-    const conflict = next.find((file) => file.path.startsWith('notes/today.conflict-'))
+    const original = next.files.find((file) => file.path === 'notes/today.md')
 
-    expect(original?.content).toBe('local version')
-    expect(conflict?.content).toBe('remote version')
+    expect(original?.content).toBe('remote version')
+    expect(next.files.some((file) => file.path.startsWith('notes/today.conflict-'))).toBe(false)
+    expect(next.conflicts).toEqual([
+      {
+        path: 'notes/today.md',
+        theirs: remoteBefore[0],
+      },
+    ])
+  })
+
+  it('does not surface a conflict when local content already matches the cloud version', async () => {
+    const remoteBefore = [await createRemoteFile('notes/today.md', 'same content', '2026-04-03T10:00:00.000Z')]
+    const next = applyChangesToSnapshot(remoteBefore, [
+      {
+        kind: 'upsert',
+        path: 'notes/today.md',
+        content: 'same content',
+        updatedAt: '2026-04-03T11:00:00.000Z',
+        base: {
+          path: 'notes/today.md',
+          contentHash: 'stale-hash',
+          updatedAt: '2026-04-03T09:00:00.000Z',
+          deletedAt: null,
+        },
+      },
+    ])
+
+    expect(next.files).toEqual(remoteBefore)
+    expect(next.conflicts).toEqual([])
   })
 })
 
@@ -163,9 +234,9 @@ describe('client sync helpers', () => {
 
   it('serializes sync requests and preserves pending-save syncs', async () => {
     const firstRun = createDeferred()
-    const runCalls: Array<{ skipPendingSave: boolean }> = []
+    const runCalls: Array<{ mode: SyncMode; skipPendingSave: boolean }> = []
     let runCount = 0
-    const runSync = vi.fn(async (options: { skipPendingSave: boolean }) => {
+    const runSync = vi.fn(async (options: { mode: SyncMode; skipPendingSave: boolean }) => {
       runCalls.push(options)
       runCount += 1
 
@@ -179,19 +250,189 @@ describe('client sync helpers', () => {
       runSync,
     })
 
-    const firstRequest = requestSync({ skipPendingSave: true })
-    const secondRequest = requestSync({ skipPendingSave: true })
-    requestSync()
+    const firstRequest = requestSync({ mode: 'precheck-if-clean', skipPendingSave: true })
+    const secondRequest = requestSync({ mode: 'precheck-if-clean', skipPendingSave: true })
+    requestSync({ mode: 'full' })
 
     expect(secondRequest).toBe(firstRequest)
     expect(runSync).toHaveBeenCalledTimes(1)
-    expect(runCalls).toEqual([{ skipPendingSave: true }])
+    expect(runCalls).toEqual([{ mode: 'precheck-if-clean', skipPendingSave: true }])
 
     firstRun.resolve()
     await firstRequest
 
     expect(runSync).toHaveBeenCalledTimes(2)
-    expect(runCalls).toEqual([{ skipPendingSave: true }, { skipPendingSave: false }])
+    expect(runCalls).toEqual([
+      { mode: 'precheck-if-clean', skipPendingSave: true },
+      { mode: 'full', skipPendingSave: false },
+    ])
     expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('updates lastSyncedAt from the manifest when nothing changed remotely', async () => {
+    const remoteFile = await createRemoteFile('notes/today.md', 'same', '2026-04-03T10:00:00.000Z')
+    const storage = createMemoryStorage([await createStoredFile('notes/today.md', 'same', '2026-04-03T10:00:00.000Z')])
+    const syncState: SyncState = {
+      files: [remoteFile],
+      lastSyncedAt: null,
+    }
+    const context = createSyncContext({
+      currentPath: 'notes/today.md',
+      storage,
+      syncState,
+    })
+    const fetchMock = vi.fn(async (input: string) => {
+      expect(input).toBe('/api/sync/manifest')
+
+      return createJsonResponse({
+        files: [
+          {
+            path: remoteFile.path,
+            contentHash: remoteFile.contentHash,
+            updatedAt: remoteFile.updatedAt,
+            deletedAt: remoteFile.deletedAt,
+          },
+        ],
+        conflicts: [],
+      })
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    await syncNow(context, { mode: 'precheck-if-clean' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(context.flushPendingSave).toHaveBeenCalledWith({ force: true })
+    expect(context.refreshWorkspace).not.toHaveBeenCalled()
+    expect(context.setHasKnownLocalChangesSinceSync).not.toHaveBeenCalled()
+    expect(context.setSyncState).toHaveBeenCalledWith({
+      files: [remoteFile],
+      lastSyncedAt: expect.any(String),
+    })
+  })
+
+  it('falls back to a full sync when the manifest differs', async () => {
+    const previousRemoteFile = await createRemoteFile('notes/today.md', 'before', '2026-04-03T10:00:00.000Z')
+    const nextRemoteFile = await createRemoteFile('notes/today.md', 'after', '2026-04-03T11:00:00.000Z')
+    const storage = createMemoryStorage([await createStoredFile('notes/today.md', 'before', '2026-04-03T10:00:00.000Z')])
+    const syncState: SyncState = {
+      files: [previousRemoteFile],
+      lastSyncedAt: null,
+    }
+    const context = createSyncContext({
+      currentPath: 'notes/today.md',
+      storage,
+      syncState,
+    })
+    const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
+      if (input === '/api/sync/manifest') {
+        return createJsonResponse({
+          files: [
+            {
+              path: nextRemoteFile.path,
+              contentHash: nextRemoteFile.contentHash,
+              updatedAt: nextRemoteFile.updatedAt,
+              deletedAt: nextRemoteFile.deletedAt,
+            },
+          ],
+        })
+      }
+
+      expect(input).toBe('/api/sync/push')
+      expect(init?.method).toBe('POST')
+
+      return createJsonResponse({
+        files: [nextRemoteFile],
+        conflicts: [],
+      })
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    await syncNow(context, { mode: 'precheck-if-clean' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(context.refreshWorkspace).toHaveBeenCalledWith('notes/today.md')
+    expect(context.setHasKnownLocalChangesSinceSync).toHaveBeenCalledWith(false)
+    expect((await storage.readTextFile('notes/today.md'))?.content).toBe('after')
+  })
+
+  it('skips the manifest precheck when local changes are already known', async () => {
+    const remoteFile = await createRemoteFile('notes/today.md', 'same', '2026-04-03T10:00:00.000Z')
+    const storage = createMemoryStorage([await createStoredFile('notes/today.md', 'same', '2026-04-03T10:00:00.000Z')])
+    const syncState: SyncState = {
+      files: [remoteFile],
+      lastSyncedAt: null,
+    }
+    const context = createSyncContext({
+      currentPath: 'notes/today.md',
+      hasKnownLocalChangesSinceSync: true,
+      storage,
+      syncState,
+    })
+    const fetchMock = vi.fn(async (input: string) => {
+      expect(input).toBe('/api/sync/push')
+
+      return createJsonResponse({
+        files: [remoteFile],
+        conflicts: [],
+      })
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    await syncNow(context, { mode: 'precheck-if-clean' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(context.setHasKnownLocalChangesSinceSync).toHaveBeenCalledWith(false)
+  })
+
+  it('surfaces sync conflicts without auto-creating a conflict file', async () => {
+    const previousRemoteFile = await createRemoteFile('notes/today.md', 'remote version', '2026-04-03T10:00:00.000Z')
+    const mineFile = await createStoredFile('notes/today.md', 'local version', '2026-04-03T11:00:00.000Z')
+    const storage = createMemoryStorage([mineFile])
+    const syncState: SyncState = {
+      files: [previousRemoteFile],
+      lastSyncedAt: null,
+    }
+    const context = createSyncContext({
+      currentPath: 'notes/today.md',
+      storage,
+      syncState,
+    })
+    const fetchMock = vi.fn(async (input: string) => {
+      expect(input).toBe('/api/sync/push')
+
+      return createJsonResponse({
+        files: [previousRemoteFile],
+        conflicts: [
+          {
+            path: 'notes/today.md',
+            theirs: previousRemoteFile,
+          },
+        ],
+      })
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    await syncNow(context, { mode: 'full' })
+
+    expect((await storage.readTextFile('notes/today.md'))?.content).toBe('local version')
+    expect(context.refreshWorkspace).toHaveBeenCalledWith('notes/today.md')
+    expect(context.setHasKnownLocalChangesSinceSync).toHaveBeenCalledWith(true)
+    expect(context.setNoteConflict).toHaveBeenCalledWith({
+      path: 'notes/today.md',
+      preferredMode: 'popover',
+      draftContent: 'local version',
+      diskFile: {
+        path: 'notes/today.md',
+        content: 'remote version',
+        contentHash: previousRemoteFile.contentHash,
+        updatedAt: '2026-04-03T10:00:00.000Z',
+      },
+      loadedSnapshot: mineFile,
+      source: 'remote',
+    })
   })
 })

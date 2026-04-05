@@ -1,4 +1,5 @@
 import { Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
+import { ConflictActions, type ConflictActionLabels } from './ConflictActions.tsx'
 import './StatusBar.css'
 import { Codicon } from './Codicon.tsx'
 
@@ -58,6 +59,10 @@ function formatAbsoluteSyncTime(timestamp: string): string | null {
 export function StatusBar(props: {
   canReconnectFolder: boolean
   canSync: boolean
+  conflict: {
+    labels: ConflictActionLabels
+    message: string
+  } | null
   errorMessage: string | null
   isSyncing: boolean
   isOpfsActive: boolean
@@ -65,10 +70,15 @@ export function StatusBar(props: {
   reconnectLabel: string | null
   storageLabel: string
   onAttachFolder(): void
+  onAcceptTheirs(): void
   onReconnectFolder(): void
+  onResolveInDiff(): void
+  onSaveMine(): void
+  onSaveMineSeparately(): void
   onSync(): void
   onSwitchToOpfs(): void
 }) {
+  const conflictPopoverId = 'statusbar-conflict-menu'
   const storagePopoverId = 'storage-menu'
   let syncLabelInterval: number | undefined
 
@@ -108,7 +118,26 @@ export function StatusBar(props: {
   return (
     <footer class="statusbar">
       <div class="statusbar-left">
-        <span class="statusbar-message">{props.errorMessage}</span>
+        <Show when={props.conflict} keyed fallback={<span class="statusbar-message">{props.errorMessage}</span>}>
+          {(conflict) => (
+            <>
+              <button type="button" class="statusbar-conflict-button" popovertarget={conflictPopoverId}>
+                <Codicon name="alert" />
+                <span>{conflict.message}</span>
+              </button>
+              <div id={conflictPopoverId} class="statusbar-conflict-popover" popover="auto">
+                <ConflictActions
+                  labels={conflict.labels}
+                  popoverId={conflictPopoverId}
+                  onAcceptTheirs={props.onAcceptTheirs}
+                  onResolveInDiff={props.onResolveInDiff}
+                  onSaveMine={props.onSaveMine}
+                  onSaveMineSeparately={props.onSaveMineSeparately}
+                />
+              </div>
+            </>
+          )}
+        </Show>
       </div>
       <div class="statusbar-right">
         <div class="statusbar-storage">

@@ -1,7 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createFolder, renameEntry, type NoteContext } from '../web/app/notes.ts'
+import { createFolder, renameEntry, saveCurrentNote, type NoteConflict, type NoteContext } from '../web/app/notes.ts'
+import { hashContent } from '../web/notes/hashes.ts'
 import type { AppSettings } from '../web/schemas.ts'
 import type { ListedEntry, NoteStorage, StoredFile } from '../web/storage/types.ts'
+
+async function createStoredFile(path: string, content: string, updatedAt: string): Promise<StoredFile> {
+  return {
+    path,
+    content,
+    contentHash: await hashContent(content),
+    updatedAt,
+  }
+}
 
 function createMockStorage(error: Error): NoteStorage {
   return {
@@ -39,9 +49,17 @@ function createMockContext(
   setErrorMessage: (message: string | null) => void,
   options: {
     currentPath?: string | null
+    draftContent?: string
     entries?: ListedEntry[]
+    loadedFileSnapshot?: StoredFile | null
+    noteConflict?: NoteConflict | null
+    saveSettings?: (settings: AppSettings) => Promise<void>
+    setDraftContent?: (content: string) => void
     setEntries?: (entries: ListedEntry[]) => void
     setCurrentPath?: (path: string | null) => void
+    setEditorValue?: (value: string) => void
+    setLoadedFileSnapshot?: (file: StoredFile | null) => void
+    setNoteConflict?: (conflict: NoteConflict | null) => void
   } = {},
 ): NoteContext {
   const settings: AppSettings = {
@@ -55,14 +73,18 @@ function createMockContext(
     storage: () => storage,
     entries: () => entries,
     currentPath: () => options.currentPath ?? null,
+    noteConflict: () => options.noteConflict ?? null,
     setCurrentPath: options.setCurrentPath ?? (() => {}),
-    draftContent: () => '',
-    setDraftContent() {},
+    draftContent: () => options.draftContent ?? '',
+    setDraftContent: options.setDraftContent ?? (() => {}),
     settings: () => settings,
-    async saveSettings() {},
+    saveSettings: options.saveSettings ?? (async () => {}),
     setEntries: options.setEntries ?? (() => {}),
     setErrorMessage,
-    setEditorValue() {},
+    setEditorValue: options.setEditorValue ?? (() => {}),
+    loadedFileSnapshot: () => options.loadedFileSnapshot ?? null,
+    setLoadedFileSnapshot: options.setLoadedFileSnapshot ?? (() => {}),
+    setNoteConflict: options.setNoteConflict ?? (() => {}),
   }
 }
 
@@ -266,6 +288,7 @@ describe('inline create errors', () => {
         storage: () => storage,
         entries: () => entries,
         currentPath: () => 'notes/today.md',
+        noteConflict: () => null,
         setCurrentPath,
         draftContent: () => '',
         setDraftContent() {},
@@ -274,6 +297,9 @@ describe('inline create errors', () => {
         setEntries,
         setErrorMessage() {},
         setEditorValue,
+        loadedFileSnapshot: () => null,
+        setLoadedFileSnapshot() {},
+        setNoteConflict() {},
       },
       { kind: 'file', path: 'notes/today.md' },
       'done.md',
@@ -346,6 +372,7 @@ describe('inline create errors', () => {
         storage: () => storage,
         entries: () => entries,
         currentPath: () => 'notes/today.md',
+        noteConflict: () => null,
         setCurrentPath,
         draftContent: () => '',
         setDraftContent() {},
@@ -354,6 +381,9 @@ describe('inline create errors', () => {
         setEntries() {},
         setErrorMessage() {},
         setEditorValue() {},
+        loadedFileSnapshot: () => null,
+        setLoadedFileSnapshot() {},
+        setNoteConflict() {},
       },
       { kind: 'directory', path: 'notes' },
       'archive',
@@ -362,5 +392,153 @@ describe('inline create errors', () => {
     expect(message).toBeNull()
     expect(renameEntryMock).toHaveBeenCalledWith('notes', 'archive', 'directory')
     expect(setCurrentPath).toHaveBeenCalledWith('archive/today.md')
+  })
+})
+
+describe('saveCurrentNote', () => {
+  it('does not rewrite an unchanged note', async () => {
+    const storedFile = await createStoredFile('notes/today.md', '# Today\n', '2026-04-05T00:00:00.000Z')
+    const writeTextFile = vi.fn(async () => storedFile)
+    const setNoteConflict = vi.fn()
+
+    const storage: NoteStorage = {
+      key: 'directory',
+      label: 'Notes',
+      async listEntries() {
+        return []
+      },
+      async listFiles() {
+        return []
+      },
+      async readTextFile() {
+        return storedFile
+      },
+      writeTextFile,
+      async deleteEntry() {},
+      async createDirectory() {},
+      async renameEntry() {},
+    }
+
+    const result = await saveCurrentNote(
+      createMockContext(storage, () => {}, {
+        currentPath: 'notes/today.md',
+        draftContent: '# Today\n',
+        loadedFileSnapshot: storedFile,
+        setNoteConflict,
+      }),
+    )
+
+    expect(result).toEqual({ status: 'unchanged' })
+    expect(writeTextFile).not.toHaveBeenCalled()
+    expect(setNoteConflict).not.toHaveBeenCalled()
+  })
+
+  it('reloads the note when the file changed on disk and the draft is unchanged', async () => {
+    const snapshot = await createStoredFile('notes/today.md', '# Today\n', '2026-04-05T00:00:00.000Z')
+    const diskFile = await createStoredFile('notes/today.md', '# Updated\n', '2026-04-05T01:00:00.000Z')
+    const setCurrentPath = vi.fn()
+    const setDraftContent = vi.fn()
+    const setEditorValue = vi.fn()
+    const setLoadedFileSnapshot = vi.fn()
+    const setNoteConflict = vi.fn()
+    const saveSettings = vi.fn(async () => {})
+
+    const storage: NoteStorage = {
+      key: 'directory',
+      label: 'Notes',
+      async listEntries() {
+        return [{ kind: 'file', path: 'notes/today.md' }]
+      },
+      async listFiles() {
+        return []
+      },
+      async readTextFile() {
+        return diskFile
+      },
+      async writeTextFile() {
+        return diskFile
+      },
+      async deleteEntry() {},
+      async createDirectory() {},
+      async renameEntry() {},
+    }
+
+    const result = await saveCurrentNote(
+      createMockContext(storage, () => {}, {
+        currentPath: 'notes/today.md',
+        draftContent: '# Today\n',
+        loadedFileSnapshot: snapshot,
+        saveSettings,
+        setCurrentPath,
+        setDraftContent,
+        setEditorValue,
+        setLoadedFileSnapshot,
+        setNoteConflict,
+      }),
+    )
+
+    expect(result).toEqual({ status: 'reloaded' })
+    expect(setCurrentPath).toHaveBeenCalledWith('notes/today.md')
+    expect(setDraftContent).toHaveBeenCalledWith('# Updated\n')
+    expect(setEditorValue).toHaveBeenCalledWith('# Updated\n')
+    expect(setLoadedFileSnapshot).toHaveBeenCalledWith(diskFile)
+    expect(setNoteConflict).not.toHaveBeenCalled()
+    expect(saveSettings).toHaveBeenCalledWith({
+      backend: 'directory',
+      lastOpenedPath: 'notes/today.md',
+    })
+  })
+
+  it('returns a conflict when both disk and draft changed', async () => {
+    const snapshot = await createStoredFile('notes/today.md', '# Today\n', '2026-04-05T00:00:00.000Z')
+    const diskFile = await createStoredFile('notes/today.md', '# Updated\n', '2026-04-05T01:00:00.000Z')
+    const writeTextFile = vi.fn(async () => diskFile)
+    const setNoteConflict = vi.fn()
+
+    const storage: NoteStorage = {
+      key: 'directory',
+      label: 'Notes',
+      async listEntries() {
+        return []
+      },
+      async listFiles() {
+        return []
+      },
+      async readTextFile() {
+        return diskFile
+      },
+      writeTextFile,
+      async deleteEntry() {},
+      async createDirectory() {},
+      async renameEntry() {},
+    }
+
+    const result = await saveCurrentNote(
+      createMockContext(storage, () => {}, {
+        currentPath: 'notes/today.md',
+        draftContent: '# Local draft\n',
+        loadedFileSnapshot: snapshot,
+        setNoteConflict,
+      }),
+    )
+
+    expect(result).toMatchObject({
+      status: 'conflict',
+      conflict: {
+        path: 'notes/today.md',
+        draftContent: '# Local draft\n',
+        diskFile,
+        loadedSnapshot: snapshot,
+      },
+    })
+    expect(writeTextFile).not.toHaveBeenCalled()
+    expect(setNoteConflict).toHaveBeenCalledWith({
+      path: 'notes/today.md',
+      preferredMode: 'popover',
+      draftContent: '# Local draft\n',
+      diskFile,
+      loadedSnapshot: snapshot,
+      source: 'local',
+    })
   })
 })

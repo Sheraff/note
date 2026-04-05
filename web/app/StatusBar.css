@@ -23,6 +23,34 @@
   white-space: nowrap;
 }
 
+.statusbar-conflict-button {
+  anchor-name: --statusbar-conflict-anchor;
+  max-width: min(34rem, 100%);
+  border: none;
+  background: transparent;
+  padding: 0 0.35rem;
+  height: 1.5rem;
+  color: #fda4af;
+  border-radius: 3px;
+
+  > svg {
+    width: 0.8rem;
+    height: 0.8rem;
+  }
+
+  > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &:hover {
+    background: rgba(248, 113, 113, 0.12);
+    border-color: transparent;
+  }
+}
+
 .statusbar-right {
   display: flex;
   align-items: center;
@@ -69,12 +97,10 @@
   max-width: 14rem;
 }
 
-.statusbar-storage-popover {
+.statusbar-storage-popover,
+.statusbar-conflict-popover {
   position: fixed;
-  position-anchor: --statusbar-storage-anchor;
   inset: auto;
-  bottom: calc(anchor(top) + 0.45rem);
-  left: anchor(left);
   margin: 0;
   min-width: 12rem;
   max-width: min(18rem, calc(100vw - 2rem));
@@ -106,6 +132,18 @@
       background: transparent;
     }
   }
+}
+
+.statusbar-conflict-popover {
+  position-anchor: --statusbar-conflict-anchor;
+  left: anchor(left);
+  bottom: calc(anchor(top) + 0.45rem);
+}
+
+.statusbar-storage-popover {
+  inset: auto;
+  bottom: calc(anchor(top) + 0.45rem);
+  left: anchor(left);
 }
 
 @keyframes statusbar-spin {

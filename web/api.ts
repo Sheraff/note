@@ -1,10 +1,11 @@
 import * as v from 'valibot'
 import {
   HealthResponseSchema,
+  ManifestResponseSchema,
   PushRequestSchema,
   SyncResponseSchema,
   type PushRequest,
-} from '../server/schemas.ts'
+} from '#server/schemas.ts'
 
 async function parseJsonResponse<TSchema extends v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>(
   response: Response,
@@ -24,6 +25,9 @@ export function createApiClient(baseUrl = '') {
     },
     async getSnapshot() {
       return parseJsonResponse(await fetch(`${baseUrl}/api/sync/snapshot`), SyncResponseSchema)
+    },
+    async getManifest() {
+      return parseJsonResponse(await fetch(`${baseUrl}/api/sync/manifest`), ManifestResponseSchema)
     },
     async pushChanges(payload: PushRequest) {
       const body = v.parse(PushRequestSchema, payload)
