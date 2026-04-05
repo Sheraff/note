@@ -35,7 +35,6 @@
   "include": [
     "server/**/*.ts",
     "playwright.config.ts",
-    "vite.config.ts",
-    "vite.server.config.ts"
+    "vite.config.ts"
   ]
 }
