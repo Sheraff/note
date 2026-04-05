@@ -130,7 +130,7 @@ function App() {
     const monaco = await import('./editor/monaco.ts')
 
     editor = monaco.createMonacoEditor(editorElement, {
-      initialValue: '',
+      initialValue: draftContent(),
       onChange(value) {
         setDraftContent(value)
         scheduleSave()
