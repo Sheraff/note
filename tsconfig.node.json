@@ -34,10 +34,7 @@
   },
   "include": [
     "server/**/*.ts",
-    "test/**/*.ts",
-    "web/**/*.d.ts",
     "vite.config.ts",
-    "vite.server.config.ts",
-    "vitest.config.ts"
+    "vite.server.config.ts"
   ]
 }
