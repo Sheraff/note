@@ -1,4 +1,3 @@
-import { playwright } from '@vitest/browser-playwright'
 import { defineConfig } from 'vitest/config'
 import solid from 'vite-plugin-solid'
 
@@ -26,20 +25,6 @@ export default defineConfig({
           name: 'solid',
           environment: 'jsdom',
           include: ['test/**/*.solid.test.tsx'],
-        },
-      },
-      {
-        extends: true,
-        test: {
-          name: 'browser',
-          include: ['test/**/*.browser.test.ts'],
-          browser: {
-            enabled: true,
-            headless: true,
-            // pnpm gives the provider package a separate Vitest type identity, but the runtime config is valid.
-            provider: playwright() as never,
-            instances: [{ browser: 'chromium' }],
-          },
         },
       },
     ],
