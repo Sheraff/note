@@ -17,6 +17,7 @@ Current test stack:
 | Rename flow + backend rename + open-path remap | yes | no | no | no | covered by note-level rename logic in `test/notes.test.ts`, direct backend rename contract coverage in `test/storage.test.ts`, and browser rename/reopen coverage in `test/storage.browser.test.ts` |
 | File rename basename selection + second-click rename entry | yes | no | no | no | covered in `test/storage.browser.test.ts` |
 | Restore last-opened note + reconnect saved folder | yes | no | no | no | covered in `test/storage.browser.test.ts` |
+| Open attached-folder note reloads or conflicts correctly after external disk edits | yes | no | no | no | covered by note-level reload/conflict coverage in `test/notes.test.ts` plus attached-folder focus-triggered reload/conflict coverage in `test/storage.browser.test.ts` |
 | Auto-sync after saves/mutations | yes | no | no | no | covered in `test/sync.browser.test.ts` for save/create/folder-create/rename/delete/manual-save wiring, conflict short-circuits, and dirty-state clearing |
 | Eager sync on startup/focus/visibility/online/polling | yes | no | no | no | covered in `test/sync.browser.test.ts` for startup, focus/visibility/online, hidden-state suppression, visible-only polling, manifest fallback, and cooldown dedupe, plus unresolved-conflict suppression in `test/conflicts.browser.test.ts` |
 | Manifest precheck when locally clean | yes | no | no | no | covered in `test/sync.test.ts` |
@@ -73,6 +74,12 @@ Current test stack:
 - Test: startup restore of the saved path, reconnect restoring the same path, and the editor showing the note content without needing an extra click.
 - Read: `web/app/storage.ts`, `web/app/notes.ts`, `web/App.tsx`, `web/storage/metadata.ts`, `test/storage.test.ts`.
 - Status: covered in `test/storage.browser.test.ts`.
+
+### Open attached-folder note after external disk edits
+
+- Test: when an attached-folder file changes outside the app, focus-triggered re-entry reloads the open note if the draft is unchanged and surfaces a local file conflict if the user has local edits, without overwriting the external version.
+- Read: `web/App.tsx`, `web/app/notes.ts`, `web/storage/file-system-access.ts`, `test/notes.test.ts`, `test/storage.browser.test.ts`.
+- Status: covered by `test/notes.test.ts` for reload-vs-conflict note logic and `test/storage.browser.test.ts` for attached-folder focus-triggered unchanged-draft reload and dirty-draft conflict behavior.
 
 ### Auto-sync after saves/mutations
 

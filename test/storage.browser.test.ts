@@ -48,6 +48,33 @@ async function createIsolatedStoragePage(browser: Browser, userId: string): Prom
   return context.newPage()
 }
 
+async function installDateNowHarness(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    let mockedNow = Date.now()
+
+    Object.defineProperty(window, '__noteStorageBrowserTestClock', {
+      configurable: true,
+      value: {
+        advanceBy(milliseconds: number) {
+          mockedNow += milliseconds
+        },
+      },
+    })
+
+    Date.now = () => mockedNow
+  })
+}
+
+async function advanceDateNow(page: Page, milliseconds: number): Promise<void> {
+  await page.evaluate((delta) => {
+    ;(window as unknown as Window & {
+      __noteStorageBrowserTestClock: {
+        advanceBy(milliseconds: number): void
+      }
+    }).__noteStorageBrowserTestClock.advanceBy(delta)
+  }, milliseconds)
+}
+
 async function installStorageHarness(page: Page, initialConfig: FakeDirectoryConfig): Promise<void> {
   await page.addInitScript(
     ({ configKey, initial }) => {
@@ -520,6 +547,12 @@ async function enterRenameModeFromFocusedOpenFile(page: Page, fileName: string):
   await noteButton.click()
 }
 
+async function dispatchWindowFocus(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('focus'))
+  })
+}
+
 test('opens and dismisses the storage popover from the status bar button', async ({ page }) => {
   const runId = randomUUID()
 
@@ -588,6 +621,83 @@ test('creates and saves a note in an attached folder, then restores it after reo
   await expect(reopenedPage.getByRole('button', { name: pickedFolderName, exact: true })).toBeVisible()
   await expect(reopenedPage.getByRole('button', { name: notePath, exact: true })).toHaveAttribute('aria-current', 'true')
   await expectEditorToContain(reopenedPage, '# Stored in directory')
+})
+
+test('reloads the open attached-folder note after an external file edit on focus when the draft is unchanged', async ({ browser }) => {
+  const runId = randomUUID()
+  const userId = `storage-external-reload-${runId}`
+  const pickedFolderName = `picked-${runId}`
+  const notePath = `external-reload-${runId}/open.md`
+  const externalContent = '# Changed outside the app\n'
+  const page = await createIsolatedStoragePage(browser, userId)
+
+  try {
+    await installDateNowHarness(page)
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [{ path: notePath, content: '# Before external change\n' }])
+    await ensureFileIsOpen(page, 'open.md')
+    await expectEditorToContain(page, '# Before external change')
+
+    await writePickedFolderFiles(page, [{ path: notePath, content: externalContent }])
+    await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe(externalContent)
+
+    await advanceDateNow(page, 11_000)
+
+    const syncResponsePromise = waitForNextSyncPush(page)
+    await dispatchWindowFocus(page)
+    await syncResponsePromise
+    await waitForSyncIdle(page)
+
+    await expect(page.getByRole('button', { name: 'open.md', exact: true })).toHaveAttribute('aria-current', 'true')
+    await expectEditorToContain(page, '# Changed outside the app')
+    await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe(externalContent)
+    await expect(page.getByRole('button', { name: new RegExp(`File conflict: ${RegExp.escape(notePath)}`) })).toHaveCount(0)
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('surfaces a local file conflict for the open attached-folder note after an external file edit on focus', async ({ browser }) => {
+  const runId = randomUUID()
+  const userId = `storage-external-conflict-${runId}`
+  const pickedFolderName = `picked-${runId}`
+  const notePath = `external-conflict-${runId}/open.md`
+  const externalContent = '# Changed outside the app\n'
+  const localDraft = '# Local draft in the app\n'
+  const page = await createIsolatedStoragePage(browser, userId)
+
+  try {
+    await installDateNowHarness(page)
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [{ path: notePath, content: '# Before external conflict\n' }])
+    await ensureFileIsOpen(page, 'open.md')
+    await expectEditorToContain(page, '# Before external conflict')
+
+    await writePickedFolderFiles(page, [{ path: notePath, content: externalContent }])
+    await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe(externalContent)
+
+    await advanceDateNow(page, 11_000)
+    await replaceEditorContent(page, localDraft)
+    await dispatchWindowFocus(page)
+
+    await expect(page.getByRole('button', { name: new RegExp(`File conflict: ${RegExp.escape(notePath)}`) })).toBeVisible()
+    await expectEditorToContain(page, '# Local draft in the app')
+    await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe(externalContent)
+  } finally {
+    await page.context().close()
+  }
 })
 
 test('keeps the current OPFS workspace active when attach folder permission is denied', async ({ page }) => {
