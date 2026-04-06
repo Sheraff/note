@@ -388,10 +388,16 @@ function App() {
   const requestSync = createSyncRequester({
     onError: reportError,
     async runSync(options) {
+      const previousLastSyncedAt = syncState().lastSyncedAt
+
       beginSyncOpenNoteTracking()
 
       try {
         await syncNow(syncContext, options)
+
+        if (syncState().lastSyncedAt !== previousLastSyncedAt) {
+          lastAutoSyncAt = Date.now()
+        }
       } finally {
         endSyncOpenNoteTracking()
       }

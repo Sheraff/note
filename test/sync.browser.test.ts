@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { expect, test, type APIRequestContext, type Browser, type Dialog, type Page, type Request as BrowserRequest } from '@playwright/test'
-import type { RemoteFile } from '../server/schemas.ts'
+import type { RemoteFile, SyncBaseEntry } from '../server/schemas.ts'
 
 type SyncSnapshotResponse = {
   files: RemoteFile[]
@@ -77,6 +77,47 @@ async function installDateNowHarness(page: Page): Promise<void> {
   })
 }
 
+async function installVisibilityStateHarness(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    let mockedVisibilityState: DocumentVisibilityState = document.visibilityState
+
+    Object.defineProperty(window, '__noteSyncBrowserTestVisibility', {
+      configurable: true,
+      value: {
+        set(nextVisibilityState: DocumentVisibilityState) {
+          mockedVisibilityState = nextVisibilityState
+        },
+      },
+    })
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get() {
+        return mockedVisibilityState
+      },
+    })
+
+    Object.defineProperty(document, 'hidden', {
+      configurable: true,
+      get() {
+        return mockedVisibilityState !== 'visible'
+      },
+    })
+  })
+}
+
+async function installPollingHarness(page: Page, pollIntervalMs = 25): Promise<void> {
+  await page.addInitScript(({ intervalMs }) => {
+    const originalSetInterval = window.setInterval.bind(window)
+
+    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      const nextTimeout = timeout === 60_000 ? intervalMs : timeout
+
+      return originalSetInterval(handler, nextTimeout, ...args)
+    }) as typeof window.setInterval
+  }, { intervalMs: pollIntervalMs })
+}
+
 async function advanceDateNow(page: Page, milliseconds: number): Promise<void> {
   await page.evaluate((delta) => {
     ;(window as unknown as Window & {
@@ -85,6 +126,27 @@ async function advanceDateNow(page: Page, milliseconds: number): Promise<void> {
       }
     }).__noteSyncBrowserTestClock.advanceBy(delta)
   }, milliseconds)
+}
+
+async function setVisibilityState(page: Page, visibilityState: DocumentVisibilityState): Promise<void> {
+  await page.evaluate((nextVisibilityState) => {
+    ;(window as unknown as Window & {
+      __noteSyncBrowserTestVisibility: {
+        set(nextVisibilityState: DocumentVisibilityState): void
+      }
+    }).__noteSyncBrowserTestVisibility.set(nextVisibilityState)
+  }, visibilityState)
+}
+
+async function dispatchVisibilityChange(page: Page, visibilityState: DocumentVisibilityState): Promise<void> {
+  await page.evaluate((nextVisibilityState) => {
+    ;(window as unknown as Window & {
+      __noteSyncBrowserTestVisibility: {
+        set(nextVisibilityState: DocumentVisibilityState): void
+      }
+    }).__noteSyncBrowserTestVisibility.set(nextVisibilityState)
+    document.dispatchEvent(new Event('visibilitychange'))
+  }, visibilityState)
 }
 
 async function waitForSyncIdle(page: Page): Promise<void> {
@@ -186,6 +248,42 @@ async function createRemoteFileOnServer(request: APIRequestContext, path: string
           content,
           updatedAt: new Date().toISOString(),
           base: null,
+        },
+      ],
+    },
+  })
+
+  expect(response.ok()).toBe(true)
+}
+
+function createBaseEntry(file: RemoteFile | null): SyncBaseEntry | null {
+  if (file === null) {
+    return null
+  }
+
+  return {
+    path: file.path,
+    contentHash: file.contentHash,
+    updatedAt: file.updatedAt,
+    deletedAt: file.deletedAt,
+  }
+}
+
+async function updateRemoteFileOnServer(request: APIRequestContext, path: string, content: string, userId?: string): Promise<void> {
+  const remoteFile = await getRemoteFile(request, path, userId)
+
+  expect(remoteFile).not.toBeNull()
+
+  const response = await request.post('/api/sync/push', {
+    ...withTestUser(userId),
+    data: {
+      changes: [
+        {
+          kind: 'upsert',
+          path,
+          content,
+          updatedAt: new Date().toISOString(),
+          base: createBaseEntry(remoteFile),
         },
       ],
     },
@@ -881,4 +979,196 @@ test('keeps workspace changes dirty until a full sync succeeds, then falls back 
   })
 
   expect(lifecyclePrecheckRequests).toEqual({ manifest: 1, push: 0 })
+})
+
+test('pulls remote changes during the startup full sync after reloading', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-startup-${runId}`
+  const path = `sync-startup-${runId}/startup.md`
+  const baseContent = '# Before startup reload\n'
+  const remoteContent = '# Pulled on startup reload\n'
+
+  await setupSyncedWorkspace(page, request, [{ path, content: baseContent }], userId)
+  await updateRemoteFileOnServer(request, path, remoteContent, userId)
+
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(remoteContent)
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(baseContent)
+
+  await reloadAndWaitForSync(page)
+
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(remoteContent)
+  await expectEditorToContain(page, '# Pulled on startup reload')
+})
+
+test('does not immediately schedule another lifecycle sync right after startup sync completes', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-startup-dedupe-${runId}`
+
+  await setupSyncedWorkspace(page, request, [{ path: `sync-startup-dedupe-${runId}/open.md`, content: '# Startup dedupe\n' }], userId)
+
+  const syncRequests = await countSyncRequestsDuring(page, async () => {
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event('focus'))
+    })
+  })
+
+  expect(syncRequests).toEqual({ manifest: 0, push: 0 })
+})
+
+test('only prechecks on visibility change when the page becomes visible', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-visibility-${runId}`
+
+  await installDateNowHarness(page)
+  await installVisibilityStateHarness(page)
+  await setupSyncedWorkspace(page, request, [{ path: `sync-visibility-${runId}/open.md`, content: '# Visibility sync\n' }], userId)
+
+  await advanceDateNow(page, 11_000)
+
+  const hiddenRequests = await countSyncRequestsDuring(page, async () => {
+    await dispatchVisibilityChange(page, 'hidden')
+  })
+
+  expect(hiddenRequests).toEqual({ manifest: 0, push: 0 })
+
+  await advanceDateNow(page, 11_000)
+
+  const visibleRequests = await countSyncRequestsDuring(page, async () => {
+    await dispatchVisibilityChange(page, 'visible')
+  })
+
+  expect(visibleRequests).toEqual({ manifest: 1, push: 0 })
+})
+
+test('ignores focus and online auto-sync triggers while the page is hidden', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-hidden-lifecycle-${runId}`
+
+  await installVisibilityStateHarness(page)
+  await setupSyncedWorkspace(page, request, [{ path: `sync-hidden-lifecycle-${runId}/open.md`, content: '# Hidden lifecycle\n' }], userId)
+  await setVisibilityState(page, 'hidden')
+
+  const hiddenRequests = await countSyncRequestsDuring(page, async () => {
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event('focus'))
+      window.dispatchEvent(new Event('online'))
+    })
+  })
+
+  expect(hiddenRequests).toEqual({ manifest: 0, push: 0 })
+})
+
+test('uses a manifest precheck when coming online clean and a full sync when local changes are pending', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-online-${runId}`
+  const path = `sync-online-${runId}/online.md`
+  const updatedContent = '# Synced after reconnecting online\n'
+
+  await installDateNowHarness(page)
+  await setupSyncedWorkspace(page, request, [{ path, content: '# Online base\n' }], userId)
+
+  await advanceDateNow(page, 11_000)
+
+  const cleanRequests = await countSyncRequestsDuring(page, async () => {
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event('online'))
+    })
+  })
+
+  expect(cleanRequests).toEqual({ manifest: 1, push: 0 })
+
+  await advanceDateNow(page, 11_000)
+
+  const dirtyRequests = await countSyncRequestsDuring(page, async () => {
+    await replaceEditorContent(page, updatedContent)
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event('online'))
+    })
+  })
+
+  expect(dirtyRequests).toEqual({ manifest: 0, push: 1 })
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(updatedContent)
+})
+
+test('falls through from a clean lifecycle manifest precheck to a full sync when the manifest differs', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-lifecycle-manifest-fallback-${runId}`
+  const path = `sync-lifecycle-manifest-fallback-${runId}/fallback.md`
+  const baseContent = '# Before lifecycle mismatch\n'
+  const remoteContent = '# Pulled after lifecycle mismatch\n'
+
+  await installDateNowHarness(page)
+  await setupSyncedWorkspace(page, request, [{ path, content: baseContent }], userId)
+  await updateRemoteFileOnServer(request, path, remoteContent, userId)
+
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(remoteContent)
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(baseContent)
+
+  await advanceDateNow(page, 11_000)
+
+  const syncRequests = await countSyncRequestsDuring(page, async () => {
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event('focus'))
+    })
+  })
+
+  expect(syncRequests).toEqual({ manifest: 1, push: 1 })
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(remoteContent)
+  await expectEditorToContain(page, '# Pulled after lifecycle mismatch')
+})
+
+test('polls only while visible and falls back to manifest prechecks when clean', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-poll-${runId}`
+
+  await installDateNowHarness(page)
+  await installVisibilityStateHarness(page)
+  await installPollingHarness(page)
+  await setupSyncedWorkspace(page, request, [{ path: `sync-poll-${runId}/poll.md`, content: '# Polling sync\n' }], userId)
+
+  await setVisibilityState(page, 'hidden')
+  await advanceDateNow(page, 11_000)
+
+  const hiddenPollRequests = await countSyncRequestsDuring(
+    page,
+    async () => {
+      await page.waitForTimeout(80)
+    },
+    { settleMs: 120 },
+  )
+
+  expect(hiddenPollRequests).toEqual({ manifest: 0, push: 0 })
+
+  await setVisibilityState(page, 'visible')
+  await advanceDateNow(page, 11_000)
+
+  const visiblePollRequests = await countSyncRequestsDuring(
+    page,
+    async () => {
+      await page.waitForTimeout(80)
+    },
+    { settleMs: 120 },
+  )
+
+  expect(visiblePollRequests).toEqual({ manifest: 1, push: 0 })
+})
+
+test('dedupes back-to-back lifecycle auto-sync triggers within the cooldown window', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-cooldown-${runId}`
+
+  await installDateNowHarness(page)
+  await setupSyncedWorkspace(page, request, [{ path: `sync-cooldown-${runId}/cooldown.md`, content: '# Cooldown sync\n' }], userId)
+
+  await advanceDateNow(page, 11_000)
+
+  const syncRequests = await countSyncRequestsDuring(page, async () => {
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event('focus'))
+      window.dispatchEvent(new Event('online'))
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+  })
+
+  expect(syncRequests).toEqual({ manifest: 1, push: 0 })
 })

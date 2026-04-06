@@ -55,6 +55,57 @@ async function createIsolatedBrowserPage(browser: Browser, userId: string): Prom
   return context.newPage()
 }
 
+async function installPollingHarness(page: Page, pollIntervalMs = 25): Promise<void> {
+  await page.addInitScript(({ intervalMs }) => {
+    const originalSetInterval = window.setInterval.bind(window)
+
+    Object.defineProperty(window, '__noteConflictBrowserTestPolling', {
+      configurable: true,
+      value: {
+        enabled: false,
+        setEnabled(nextEnabled: boolean) {
+          this.enabled = nextEnabled
+        },
+      },
+    })
+
+    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      if (timeout === 60_000) {
+        return originalSetInterval(() => {
+          const polling = (window as unknown as Window & {
+            __noteConflictBrowserTestPolling: {
+              enabled: boolean
+            }
+          }).__noteConflictBrowserTestPolling
+
+          if (!polling.enabled) {
+            return
+          }
+
+          if (typeof handler === 'function') {
+            handler(...args)
+            return
+          }
+
+          window.eval(handler)
+        }, intervalMs)
+      }
+
+      return originalSetInterval(handler, timeout, ...args)
+    }) as typeof window.setInterval
+  }, { intervalMs: pollIntervalMs })
+}
+
+async function setPollingHarnessEnabled(page: Page, enabled: boolean): Promise<void> {
+  await page.evaluate((nextEnabled) => {
+    ;(window as unknown as Window & {
+      __noteConflictBrowserTestPolling: {
+        setEnabled(nextEnabled: boolean): void
+      }
+    }).__noteConflictBrowserTestPolling.setEnabled(nextEnabled)
+  }, enabled)
+}
+
 function createBaseEntry(file: RemoteFile | null): SyncBaseEntry | null {
   if (file === null) {
     return null
@@ -342,7 +393,12 @@ type MultipleRemoteConflictScenario = {
   userId: string
 }
 
-async function setupRemoteConflict(page: Page, request: APIRequestContext, userId?: string): Promise<RemoteConflictScenario> {
+async function setupRemoteConflict(
+  page: Page,
+  request: APIRequestContext,
+  userId?: string,
+  options: { assertTreeConflictClass?: boolean } = {},
+): Promise<RemoteConflictScenario> {
   const effectiveUserId = userId ?? `browser-${randomUUID()}`
   const runId = randomUUID()
   const folder = `e2e/${runId}`
@@ -376,7 +432,11 @@ async function setupRemoteConflict(page: Page, request: APIRequestContext, userI
   const noteButton = page.getByRole('button', { name: fileName, exact: true })
 
   await expect(conflictButton).toBeVisible()
-  await expect(noteButton).toHaveClass(/tree-entry-conflict/)
+
+  if (options.assertTreeConflictClass !== false) {
+    await expect(noteButton).toHaveClass(/tree-entry-conflict/)
+  }
+
   await expect.poll(async () => await readOpfsFile(page, path)).toBe(localContent)
   await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual([path])
 
@@ -906,6 +966,28 @@ test('ignores focus, visibility, and online auto-sync triggers while a conflict 
   expect(syncRequests).toBe(0)
   await expect(page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) })).toBeVisible()
   await expect(page.locator('.monaco-editor .view-lines').last()).toContainText('Still unresolved after lifecycle events')
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(localContent)
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(remoteContent)
+})
+
+test('ignores polling auto-sync triggers while a conflict is unresolved', async ({ page, request }) => {
+  await installPollingHarness(page)
+
+  const { localContent, path, remoteContent, userId } = await setupRemoteConflict(page, request, undefined, {
+    assertTreeConflictClass: false,
+  })
+  const updatedDraft = `${localContent}Still unresolved during polling\n`
+
+  await replaceEditorContent(page, updatedDraft)
+  await setPollingHarnessEnabled(page, true)
+
+  const syncRequests = await countSyncRequestsDuring(page, async () => {
+    await page.waitForTimeout(160)
+  })
+
+  expect(syncRequests).toBe(0)
+  await expect(page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) })).toBeVisible()
+  await expect(page.locator('.monaco-editor .view-lines').last()).toContainText('Still unresolved during polling')
   await expect.poll(async () => await readOpfsFile(page, path)).toBe(localContent)
   await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(remoteContent)
 })
