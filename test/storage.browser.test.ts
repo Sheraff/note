@@ -1167,6 +1167,47 @@ test('enters file rename mode on a second click of the focused open file', async
   }
 })
 
+test('does not enter folder rename mode on a second click of a focused folder', async ({ browser }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const folderPath = `folder-second-click-${runId}`
+  const fileName = `inside-${runId}.md`
+  const notePath = `${folderPath}/${fileName}`
+  const page = await createIsolatedStoragePage(browser, `storage-folder-second-click-${runId}`)
+
+  try {
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [{ path: notePath, content: '# Folder toggle\n' }])
+
+    const folderButton = page.getByRole('button', { name: folderPath, exact: true })
+    const noteButton = page.getByRole('button', { name: fileName, exact: true })
+
+    await expect(folderButton).toBeVisible()
+    await expect(noteButton).toBeVisible()
+
+    await folderButton.focus()
+    await folderButton.click()
+
+    await expect(folderButton).toHaveAttribute('aria-expanded', 'false')
+    await expect(noteButton).toHaveCount(0)
+    await expect(page.locator('.tree-row-editor input')).toHaveCount(0)
+
+    await folderButton.click()
+
+    await expect(folderButton).toHaveAttribute('aria-expanded', 'true')
+    await expect(noteButton).toBeVisible()
+    await expect(page.locator('.tree-row-editor input')).toHaveCount(0)
+  } finally {
+    await page.context().close()
+  }
+})
+
 test('selects only the basename when file rename mode opens', async ({ browser }) => {
   const runId = randomUUID()
   const pickedFolderName = `picked-${runId}`

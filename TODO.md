@@ -12,7 +12,7 @@
 - [x] there are situations where i'm typing and my cursor changes position. It seems sometimes the sync (maybe?) causes this change, even in situations where my note is in the latest version. In those cases the cursor is always reset to the topmost position. I think it happens if i edit the note *during* a sync.
 - [x] is the "Dark 2026" theme available on monaco editor? if yes use it
 - [x] when i create a new note in an empty folder, it creates the note i want AND an `untitled.md` note. It doesn't happen if i create it at the root, only inside a folder *that doesn't already have* an `untitled.md` note.
-- [ ] "clicking a second time to enter rename mode" should only apply to files, not folders
+- [x] "clicking a second time to enter rename mode" should only apply to files, not folders
 - [ ] when creating a new file we prefill the input with "untitled.md" and the entire input is pre-selected. We would like to only pre-select the "untitled" without the extension, so creating a new note is faster
 - [ ] add a cmd+N keyboard shortcut that will create a new note in the same folder that we are already in (or fallback to the root), it should immediately focus the input of the new note's name, like if we had clicked on the "new note" button
 - [ ] in the file tree, if a folder is closed, but contains files that have conflicts, there should be an indication on the folder

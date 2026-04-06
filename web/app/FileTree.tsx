@@ -314,8 +314,6 @@ function DirectoryNode(props: {
   onSubmitRename(name: string): Promise<string | null>
 }) {
   const [isOpen, setIsOpen] = createSignal(true)
-  let hadFocus = false
-  let wasFocusedOnMouseDown = false
 
   createEffect(() => {
     if (props.pendingCreation?.parentPath === props.node.path) {
@@ -334,25 +332,7 @@ function DirectoryNode(props: {
               class="tree-entry"
               type="button"
               aria-expanded={isOpen() ? 'true' : 'false'}
-              onFocus={() => {
-                hadFocus = true
-              }}
-              onBlur={() => {
-                hadFocus = false
-              }}
-              onMouseDown={(event) => {
-                wasFocusedOnMouseDown = hadFocus
-
-                if (hadFocus) {
-                  event.preventDefault()
-                }
-              }}
-              onClick={(event) => {
-                if (wasFocusedOnMouseDown || event.detail > 1) {
-                  props.onStartRename(props.node.path, props.node.kind, props.node.name)
-                  return
-                }
-
+              onClick={() => {
                 setIsOpen(!isOpen())
               }}
             >
