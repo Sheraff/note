@@ -19,7 +19,7 @@ Current test stack:
 | Monaspace only in Monaco + Monaco worker boot | no | no | no | yes | needs real editor boot smoke |
 | Restore last-opened note + reconnect saved folder | yes | no | no | no | covered in `test/storage.browser.test.ts` |
 | Auto-sync after saves/mutations | yes | no | no | no | covered in `test/sync.browser.test.ts` for save/create/folder-create/rename/delete/manual-save wiring, conflict short-circuits, and dirty-state clearing |
-| Eager sync on startup/focus/visibility/online/polling | no | no | no | yes | browser lifecycle/timer behavior |
+| Eager sync on startup/focus/visibility/online/polling | yes | no | no | no | covered in `test/sync.browser.test.ts` for startup, focus/visibility/online, hidden-state suppression, visible-only polling, manifest fallback, and cooldown dedupe, plus unresolved-conflict suppression in `test/conflicts.browser.test.ts` |
 | Manifest precheck when locally clean | yes | no | no | no | covered in `test/sync.test.ts` |
 | Conflict detection + explicit choices + no auto conflict file | yes | no | no | no | local conflict helpers are unit-tested and remote end-user flows are covered in `test/conflicts.browser.test.ts` |
 | Non-blocking conflict indicators in status bar/tree popovers | yes | no | no | no | covered in `test/conflicts.browser.test.ts` for status bar, tree popover, unresolved editing, and cleanup |
@@ -90,6 +90,7 @@ Current test stack:
 
 - Test: startup full sync, lifecycle-triggered precheck sync, cooldown dedupe, visible-only polling, and suppression while a conflict is unresolved.
 - Read: `web/App.tsx`, `web/app/sync.ts`, `web/app/storage.ts`, `test/sync.test.ts`.
+- Status: covered in `test/sync.browser.test.ts` for startup full sync, focus/visibility/online triggers, hidden-state suppression, visible-only polling, manifest-mismatch fallback, and immediate post-startup dedupe, plus unresolved-conflict suppression in `test/conflicts.browser.test.ts`.
 
 ### Manifest precheck when locally clean
 
