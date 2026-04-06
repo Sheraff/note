@@ -928,6 +928,38 @@ test('keeps later conflicts unresolved when multiple cloud conflicts arrive in o
   await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual(files.map((file) => file.path).sort())
 })
 
+test('marks a closed folder while it contains an unresolved cloud conflict', async ({ browser, request }) => {
+  const userId = `browser-${randomUUID()}`
+  const page = await createIsolatedBrowserPage(browser, userId)
+
+  try {
+    const { fileName, folder, path } = await setupRemoteConflict(page, request, userId)
+    const folderName = folder.split('/')[0]
+
+    expect(folderName).toBeDefined()
+
+    const folderButton = page.getByRole('button', { name: folderName!, exact: true })
+    const conflictNoteButton = page.getByRole('button', { name: fileName, exact: true })
+    const statusbarConflictButton = page.getByRole('button', {
+      name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`),
+    })
+
+    await folderButton.click()
+
+    await expect(conflictNoteButton).toHaveCount(0)
+    await expect(folderButton).toHaveAttribute('aria-expanded', 'false')
+    await expect(folderButton).toHaveClass(/tree-entry-descendant-conflict/)
+
+    await statusbarConflictButton.click()
+    await page.getByRole('button', { name: 'Accept cloud version' }).click()
+
+    await expect(page.getByRole('button', { name: /Cloud conflict:/ })).toHaveCount(0)
+    await expect(folderButton).not.toHaveClass(/tree-entry-descendant-conflict/)
+  } finally {
+    await page.context().close()
+  }
+})
+
 test('opens and dismisses the status bar and tree conflict popovers', async ({ browser, request }) => {
   const userId = `browser-${randomUUID()}`
   const page = await createIsolatedBrowserPage(browser, userId)

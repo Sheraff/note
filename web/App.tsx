@@ -169,6 +169,7 @@ function App() {
       diskFileExists: conflict.diskFile !== null,
     }
   })
+  const conflictPaths = createMemo(() => blockedSyncPaths())
 
   function reportError(error: unknown) {
     setErrorMessage(getErrorMessage(error))
@@ -920,6 +921,7 @@ function App() {
       <main class="workspace" style={{ 'grid-template-columns': `${sidebarWidth()}px 0px 1fr` } as JSX.CSSProperties}>
         <NotesSidebar
           conflict={conflictSummary()}
+          conflictPaths={conflictPaths()}
           currentPath={currentPath()}
           emptyMessage={emptyMessage()}
           fileCount={fileCount()}

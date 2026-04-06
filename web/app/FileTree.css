@@ -44,8 +44,7 @@
         background: rgba(59, 130, 246, 0.16);
       }
 
-      >.tree-entry.tree-entry-conflict {
-        anchor-name: --tree-conflict-anchor;
+      >.tree-entry.tree-entry-has-conflict {
         color: #fecaca;
         background: rgba(127, 29, 29, 0.2);
         outline: 1px solid rgba(248, 113, 113, 0.22);
@@ -54,6 +53,10 @@
           margin-left: auto;
           color: #fda4af;
         }
+      }
+
+      >.tree-entry.tree-entry-conflict {
+        anchor-name: --tree-conflict-anchor;
       }
 
       >.tree-actions {

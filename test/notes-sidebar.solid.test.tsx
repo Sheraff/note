@@ -18,6 +18,7 @@ function renderSidebar(
 ) {
   const props: NotesSidebarProps = {
     conflict: null,
+    conflictPaths: [],
     currentPath: null,
     emptyMessage: 'Attach a folder to reopen your notes.',
     fileCount: entries.filter((entry) => entry.kind === 'file').length,
@@ -187,6 +188,25 @@ describe('NotesSidebar', () => {
     fireEvent.click(folderButton)
 
     expect(screen.getByRole('button', { name: 'today.md' })).toBeTruthy()
+  })
+
+  it('marks a closed folder when a descendant note path is conflicted', () => {
+    renderSidebar(
+      {
+        conflictPaths: ['notes/today.md'],
+      },
+      [
+        { kind: 'directory', path: 'notes' },
+        { kind: 'file', path: 'notes/today.md' },
+      ],
+    )
+
+    const folderButton = screen.getByRole('button', { name: 'notes' })
+
+    fireEvent.click(folderButton)
+
+    expect(folderButton.className).toContain('tree-entry-descendant-conflict')
+    expect(screen.queryByRole('button', { name: 'today.md' })).toBeNull()
   })
 
   it('starts nested note creation from a folder action button', () => {

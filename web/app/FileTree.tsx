@@ -168,6 +168,16 @@ function conflictLabels(conflict: { labels: ConflictActionLabels; path: string }
   )
 }
 
+function hasConflictPath(conflict: { path: string } | null, conflictPaths: string[], path: string): boolean {
+  return conflict?.path === path || conflictPaths.includes(path)
+}
+
+function hasDescendantConflictPath(conflict: { path: string } | null, conflictPaths: string[], path: string): boolean {
+  const descendantPrefix = `${path}/`
+
+  return (conflict?.path.startsWith(descendantPrefix) ?? false) || conflictPaths.some((conflictPath) => conflictPath.startsWith(descendantPrefix))
+}
+
 function getTreeNode(nodes: TreeNode[], path: string): TreeNode {
   const node = nodes.find((candidate) => candidate.path === path)
 
@@ -180,6 +190,7 @@ function getTreeNode(nodes: TreeNode[], path: string): TreeNode {
 
 function FileNodeRow(props: {
   conflict: { labels: ConflictActionLabels; path: string } | null
+  conflictPaths: string[]
   currentPath: string | null
   node: TreeNode
   onAcceptTheirs(): void
@@ -191,7 +202,8 @@ function FileNodeRow(props: {
   onSaveMineSeparately(): void
   onStartRename(path: string, kind: TreeNode['kind'], name: string): void
 }) {
-  const hasConflict = () => props.conflict?.path === props.node.path
+  const hasConflict = () => hasConflictPath(props.conflict, props.conflictPaths, props.node.path)
+  const hasActiveConflict = () => props.conflict?.path === props.node.path
   const popoverId = `tree-conflict-${props.node.path.replaceAll('/', '--')}`
   let hadFocus = false
   let renameArmed = false
@@ -206,9 +218,13 @@ function FileNodeRow(props: {
   return (
     <div class="tree-row">
       <button
-        classList={{ 'tree-entry': true, 'tree-entry-conflict': hasConflict() }}
+        classList={{
+          'tree-entry': true,
+          'tree-entry-has-conflict': hasConflict(),
+          'tree-entry-conflict': hasActiveConflict(),
+        }}
         aria-current={props.currentPath === props.node.path ? 'true' : undefined}
-        popovertarget={hasConflict() ? popoverId : undefined}
+        popovertarget={hasActiveConflict() ? popoverId : undefined}
         type="button"
         onFocus={() => {
           hadFocus = true
@@ -232,7 +248,7 @@ function FileNodeRow(props: {
           }
         }}
         onClick={(event) => {
-          if (hasConflict()) {
+          if (hasActiveConflict()) {
             props.onOpenConflict(props.node.path)
             return
           }
@@ -254,7 +270,7 @@ function FileNodeRow(props: {
           <Codicon name="alert" />
         </Show>
       </button>
-      <Show when={hasConflict()}>
+      <Show when={hasActiveConflict()}>
         <div id={popoverId} class="tree-conflict-popover" popover="auto">
           <ConflictActions
             labels={conflictLabels(props.conflict)}
@@ -295,6 +311,7 @@ function FileNodeRow(props: {
 
 function DirectoryNode(props: {
   conflict: { labels: ConflictActionLabels; path: string } | null
+  conflictPaths: string[]
   currentPath: string | null
   node: TreeNode
   pendingCreation: PendingCreation | null
@@ -314,6 +331,7 @@ function DirectoryNode(props: {
   onSubmitRename(name: string): Promise<string | null>
 }) {
   const [isOpen, setIsOpen] = createSignal(true)
+  const hasClosedDescendantConflict = () => !isOpen() && hasDescendantConflictPath(props.conflict, props.conflictPaths, props.node.path)
 
   createEffect(() => {
     if (props.pendingCreation?.parentPath === props.node.path) {
@@ -329,7 +347,7 @@ function DirectoryNode(props: {
         fallback={
           <div class="tree-row">
             <button
-              class="tree-entry"
+              class={hasClosedDescendantConflict() ? 'tree-entry tree-entry-has-conflict tree-entry-descendant-conflict' : 'tree-entry'}
               type="button"
               aria-expanded={isOpen() ? 'true' : 'false'}
               onClick={() => {
@@ -338,6 +356,9 @@ function DirectoryNode(props: {
             >
               <Codicon name={isOpen() ? 'folder-opened' : 'folder'} />
               <span>{props.node.name}</span>
+              <Show when={hasClosedDescendantConflict()}>
+                <Codicon name="alert" />
+              </Show>
             </button>
             <div class="tree-actions">
               <button
@@ -398,6 +419,7 @@ function DirectoryNode(props: {
       <Show when={isOpen()}>
         <FileTree
           conflict={props.conflict}
+          conflictPaths={props.conflictPaths}
           currentPath={props.currentPath}
           parentPath={props.node.path}
           nodes={props.node.children}
@@ -424,6 +446,7 @@ function DirectoryNode(props: {
 
 export function FileTree(props: {
   conflict: { labels: ConflictActionLabels; path: string } | null
+  conflictPaths: string[]
   currentPath: string | null
   parentPath: string | null
   nodes: TreeNode[]
@@ -471,6 +494,7 @@ export function FileTree(props: {
               {currentNode().kind === 'directory' ? (
                 <DirectoryNode
                   conflict={props.conflict}
+                  conflictPaths={props.conflictPaths}
                   currentPath={props.currentPath}
                   node={currentNode()}
                   onAcceptTheirs={props.onAcceptTheirs}
@@ -496,6 +520,7 @@ export function FileTree(props: {
                   fallback={
                     <FileNodeRow
                       conflict={props.conflict}
+                      conflictPaths={props.conflictPaths}
                       currentPath={props.currentPath}
                       node={currentNode()}
                       onAcceptTheirs={props.onAcceptTheirs}

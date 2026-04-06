@@ -12,6 +12,7 @@ export function NotesSidebar(props: {
     labels: ConflictActionLabels
     path: string
   } | null
+  conflictPaths: string[]
   currentPath: string | null
   emptyMessage: string
   fileCount: number
@@ -145,6 +146,7 @@ export function NotesSidebar(props: {
       <Show when={props.nodes.length > 0 || pendingCreation()?.parentPath === null} fallback={<p>{props.emptyMessage}</p>}>
         <FileTree
           conflict={props.conflict}
+          conflictPaths={props.conflictPaths}
           currentPath={props.currentPath}
           parentPath={null}
           nodes={props.nodes}
