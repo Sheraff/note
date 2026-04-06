@@ -4,7 +4,7 @@ import { getParentPath } from '../notes/paths.ts'
 import type { TreeNode } from '../notes/tree.ts'
 import { Codicon } from './Codicon.tsx'
 import { type ConflictActionLabels } from './ConflictActions.tsx'
-import { FileTree, type PendingCreation, type PendingRename } from './FileTree.tsx'
+import { FileTree, type EntryEditorSubmitSource, type PendingCreation, type PendingRename } from './FileTree.tsx'
 import './NotesSidebar.css'
 
 export function NotesSidebar(props: {
@@ -20,7 +20,7 @@ export function NotesSidebar(props: {
   nodes: TreeNode[]
   onAcceptTheirs(): void
   onCreateFolder(parentPath: string | null, name: string): Promise<string | null>
-  onCreateNote(parentPath: string | null, name: string): Promise<string | null>
+  onCreateNote(parentPath: string | null, name: string, submitSource: EntryEditorSubmitSource): Promise<string | null>
   onDeleteEntry(path: string, kind: TreeNode['kind']): void
   onOpen(path: string): void
   onOpenConflict(path: string): void
@@ -87,7 +87,7 @@ export function NotesSidebar(props: {
     })
   }
 
-  async function submitPendingCreation(name: string): Promise<string | null> {
+  async function submitPendingCreation(name: string, submitSource: EntryEditorSubmitSource): Promise<string | null> {
     const nextCreation = pendingCreation()
 
     if (nextCreation === null) {
@@ -95,7 +95,7 @@ export function NotesSidebar(props: {
     }
 
     if (nextCreation.kind === 'file') {
-      return props.onCreateNote(nextCreation.parentPath, name)
+      return props.onCreateNote(nextCreation.parentPath, name, submitSource)
     }
 
     return props.onCreateFolder(nextCreation.parentPath, name)

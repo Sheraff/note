@@ -289,7 +289,7 @@ describe('NotesSidebar', () => {
     fireEvent.keyDown(getTextbox(), { key: 'Enter' })
 
     await waitFor(() => {
-      expect(props.onCreateNote).toHaveBeenCalledWith(null, 'journal.md')
+      expect(props.onCreateNote).toHaveBeenCalledWith(null, 'journal.md', 'enter')
     })
   })
 
@@ -316,7 +316,7 @@ describe('NotesSidebar', () => {
     fireEvent.keyDown(getTextbox(), { key: 'Enter' })
 
     await waitFor(() => {
-      expect(props.onCreateNote).toHaveBeenCalledWith('notes', 'journal.md')
+      expect(props.onCreateNote).toHaveBeenCalledWith('notes', 'journal.md', 'enter')
     })
   })
 
@@ -343,7 +343,7 @@ describe('NotesSidebar', () => {
     fireEvent.blur(getTextbox())
 
     await waitFor(() => {
-      expect(props.onCreateNote).toHaveBeenCalledWith(null, 'journal.md')
+      expect(props.onCreateNote).toHaveBeenCalledWith(null, 'journal.md', 'blur')
     })
   })
 

@@ -15,6 +15,8 @@ export type PendingRename = {
   name: string
 }
 
+export type EntryEditorSubmitSource = 'blur' | 'enter'
+
 function getFileRenameSelectionEnd(name: string): number {
   const extensionStart = name.lastIndexOf('.')
 
@@ -26,7 +28,7 @@ function EntryEditorRow(props: {
   initialValue: string
   initialSelection: 'all' | 'basename'
   onCancel(): void
-  onSubmit(name: string): Promise<string | null>
+  onSubmit(name: string, submitSource: EntryEditorSubmitSource): Promise<string | null>
 }) {
   let inputElement: HTMLInputElement | undefined
   let allowBlurHandling = false
@@ -58,7 +60,7 @@ function EntryEditorRow(props: {
     })
   })
 
-  async function submit() {
+  async function submit(submitSource: EntryEditorSubmitSource) {
     if (isSubmitting()) {
       return
     }
@@ -71,7 +73,7 @@ function EntryEditorRow(props: {
     setIsSubmitting(true)
 
     try {
-      const nextError = await props.onSubmit(value())
+      const nextError = await props.onSubmit(value(), submitSource)
 
       if (nextError === null) {
         props.onCancel()
@@ -114,7 +116,7 @@ function EntryEditorRow(props: {
               return
             }
 
-            void submit()
+            void submit('blur')
           }}
           onInput={(event) => {
             allowBlurHandling = true
@@ -124,7 +126,7 @@ function EntryEditorRow(props: {
           onKeyDown={(event) => {
             if (event.key === 'Enter') {
               event.preventDefault()
-              void submit()
+              void submit('enter')
             }
 
             if (event.key === 'Escape') {
@@ -144,7 +146,7 @@ function EntryEditorRow(props: {
 function CreateRow(props: {
   kind: TreeNode['kind']
   onCancel(): void
-  onSubmit(name: string): Promise<string | null>
+  onSubmit(name: string, submitSource: EntryEditorSubmitSource): Promise<string | null>
 }) {
   return (
     <EntryEditorRow
@@ -327,7 +329,7 @@ function DirectoryNode(props: {
   onSaveMine(): void
   onSaveMineSeparately(): void
   onStartRename(path: string, kind: TreeNode['kind'], name: string): void
-  onSubmitCreation(name: string): Promise<string | null>
+  onSubmitCreation(name: string, submitSource: EntryEditorSubmitSource): Promise<string | null>
   onSubmitRename(name: string): Promise<string | null>
 }) {
   const [isOpen, setIsOpen] = createSignal(true)
@@ -463,7 +465,7 @@ export function FileTree(props: {
   onSaveMine(): void
   onSaveMineSeparately(): void
   onStartRename(path: string, kind: TreeNode['kind'], name: string): void
-  onSubmitCreation(name: string): Promise<string | null>
+  onSubmitCreation(name: string, submitSource: EntryEditorSubmitSource): Promise<string | null>
   onSubmitRename(name: string): Promise<string | null>
 }) {
   return (

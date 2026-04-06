@@ -1,5 +1,6 @@
 import { createMemo, createSignal, onCleanup, onMount, type JSX } from 'solid-js'
 import { EditorPane } from './app/EditorPane.tsx'
+import type { EntryEditorSubmitSource } from './app/FileTree.tsx'
 import { NotesSidebar } from './app/NotesSidebar.tsx'
 import { StatusBar } from './app/StatusBar.tsx'
 import type { ConflictActionLabels } from './app/ConflictActions.tsx'
@@ -661,7 +662,11 @@ function App() {
     await restoreConflictFromDisk()
   }
 
-  async function handleCreateNote(parentPath: string | null, name: string): Promise<string | null> {
+  async function handleCreateNote(
+    parentPath: string | null,
+    name: string,
+    submitSource: EntryEditorSubmitSource,
+  ): Promise<string | null> {
     try {
       const saveResult = await flushPendingSave()
 
@@ -676,6 +681,12 @@ function App() {
       if (shouldSyncAfterSaveResult(saveResult) || message === null) {
         setHasUnsyncedWorkspaceChanges(true)
         await requestSync({ mode: 'full', skipPendingSave: true })
+      }
+
+      if (message === null && submitSource === 'enter') {
+        window.requestAnimationFrame(() => {
+          editor?.focus()
+        })
       }
 
       return message
