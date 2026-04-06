@@ -14,14 +14,16 @@
 - [x] when i create a new note in an empty folder, it creates the note i want AND an `untitled.md` note. It doesn't happen if i create it at the root, only inside a folder *that doesn't already have* an `untitled.md` note.
 - [x] "clicking a second time to enter rename mode" should only apply to files, not folders
 - [x] when creating a new file we prefill the input with "untitled.md" and the entire input is pre-selected. We would like to only pre-select the "untitled" without the extension, so creating a new note is faster
-- [ ] add a cmd+N keyboard shortcut that will create a new note in the same folder that we are already in (or fallback to the root), it should immediately focus the input of the new note's name, like if we had clicked on the "new note" button
+- [x] add a cmd+alt+N keyboard shortcut that will create a new note in the same folder that we are already in (or fallback to the root), it should immediately focus the input of the new note's name, like if we had clicked on the "new note" button
 - [ ] in the file tree, if a folder is closed, but contains files that have conflicts, there should be an indication on the folder
+- [ ] when creating a new note, if i submit the file name with "enter", i should automatically be focused onto the editor
 - [ ] all (most?) buttons should have a keyboard shortcut (use tanstack/hotkeys)
 - [ ] if i'm editing a note in a separate editor (when using file system API) and the same note is open in this app, it should update in the app (currently, after editing if I go back to the app, it seems to remove all the changes I made on the external editor, this only happens if the note was open in both, but works fine if i had another note open in this app)
 - [ ] When I switch from OPFS to the file system API (and there are existing notes in the OPFS) I should be asked if i want to transfer existing notes to the file system
 - [ ] we should be able to drag a file to move it to a different folder, droping on a folder moves it there, hovering (while dragging) on a folder for 1 second should open the folder, and dropping on empty space should move it to the root
 - [ ] we will need to figure out how to support images (and other attachments)
 - [ ] SSO (see ~/web/foo/index.js for how to use our own internal sso, and ~/web/foo/package.json for how to install it)
+- [ ] if we added a "command palette", what could we put in it? i like the idea
 
 
 

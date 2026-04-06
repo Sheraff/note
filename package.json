@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@hono/node-server": "1.19.12",
+    "@tanstack/hotkeys": "0.7.1",
     "@vscode/codicons": "0.0.45",
     "hono": "4.12.10",
     "monaco-editor": "0.55.1",

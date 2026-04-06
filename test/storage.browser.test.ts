@@ -743,6 +743,86 @@ test('selects only the basename when new note mode opens', async ({ page }) => {
   })).toEqual({ start: 0, end: basenameEnd })
 })
 
+test('creates a new root note with the keyboard shortcut when no note is open', async ({ page }) => {
+  const runId = randomUUID()
+  const noteName = `shortcut-root-${runId}`
+  const basenameEnd = 'untitled.md'.lastIndexOf('.')
+
+  await installStorageHarness(page, {
+    appOpfsRootName: `app-opfs-${runId}`,
+    pickedFolderName: `picked-${runId}`,
+    queryPermission: 'prompt',
+    requestPermission: 'granted',
+  })
+  await installTestUserHeader(page, `storage-shortcut-root-${runId}`)
+
+  await attachPickedFolder(page)
+  await page.keyboard.press('ControlOrMeta+Alt+N')
+
+  const input = page.locator('.tree-row-editor input')
+
+  await expect(input).toHaveValue('untitled.md')
+  await expect(input).toBeFocused()
+  await expect.poll(async () => await input.evaluate((element) => {
+    const input = element as HTMLInputElement
+
+    return {
+      end: input.selectionEnd,
+      start: input.selectionStart,
+    }
+  })).toEqual({ start: 0, end: basenameEnd })
+
+  await input.fill(noteName)
+  await input.press('Enter')
+
+  const notePath = `${noteName}.md`
+  const noteButton = page.getByRole('button', { name: notePath, exact: true })
+
+  await expect(noteButton).toBeVisible()
+  await expect(noteButton).toHaveAttribute('aria-current', 'true')
+  await expectEditorToContain(page, '# Untitled')
+  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('# Untitled\n')
+})
+
+test('creates a new note in the open note folder with the keyboard shortcut while Monaco is focused', async ({ page }) => {
+  const runId = randomUUID()
+  const folderName = `shortcut-folder-${runId}`
+  const openNoteName = `open-${runId}`
+  const newNoteName = `next-${runId}`
+
+  await installStorageHarness(page, {
+    appOpfsRootName: `app-opfs-${runId}`,
+    pickedFolderName: `picked-${runId}`,
+    queryPermission: 'prompt',
+    requestPermission: 'granted',
+  })
+  await installTestUserHeader(page, `storage-shortcut-folder-${runId}`)
+
+  await attachPickedFolder(page)
+  await createFolderFromSidebar(page, folderName)
+  await createNoteInFolderFromSidebar(page, folderName, openNoteName, 'enter')
+
+  await page.locator('.monaco-editor').last().click({ position: { x: 120, y: 24 } })
+  await page.keyboard.press('ControlOrMeta+Alt+N')
+
+  const input = page.locator('.tree-row-editor input')
+
+  await expect(input).toHaveValue('untitled.md')
+  await expect(input).toBeFocused()
+
+  await input.fill(newNoteName)
+  await input.press('Enter')
+
+  const notePath = `${folderName}/${newNoteName}.md`
+  const noteButton = page.getByRole('button', { name: `${newNoteName}.md`, exact: true })
+
+  await expect(noteButton).toBeVisible()
+  await expect(noteButton).toHaveAttribute('aria-current', 'true')
+  await expectEditorToContain(page, '# Untitled')
+  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('# Untitled\n')
+  await expect.poll(async () => await readPickedFolderFile(page, `${newNoteName}.md`)).toBe(null)
+})
+
 test('reloads the open attached-folder note after an external file edit on focus when the draft is unchanged', async ({ browser }) => {
   const runId = randomUUID()
   const userId = `storage-external-reload-${runId}`

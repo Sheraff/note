@@ -1,4 +1,6 @@
-import { Show, createSignal } from 'solid-js'
+import { createHotkeyHandler } from '@tanstack/hotkeys'
+import { Show, createSignal, onCleanup } from 'solid-js'
+import { getParentPath } from '../notes/paths.ts'
 import type { TreeNode } from '../notes/tree.ts'
 import { Codicon } from './Codicon.tsx'
 import { type ConflictActionLabels } from './ConflictActions.tsx'
@@ -42,6 +44,46 @@ export function NotesSidebar(props: {
   function startRename(path: string, kind: TreeNode['kind'], name: string) {
     setPendingCreation(null)
     setPendingRename({ path, kind, name })
+  }
+
+  function shouldHandleNewNoteShortcut(event: KeyboardEvent): boolean {
+    const target = event.target
+
+    if (!(target instanceof HTMLElement)) {
+      return true
+    }
+
+    if (target.closest('.monaco-editor') !== null) {
+      return true
+    }
+
+    return !(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable)
+  }
+
+  if (typeof document !== 'undefined') {
+    const handleNewNoteHotkey = createHotkeyHandler(
+      'Mod+Alt+N',
+      (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+
+        if (!props.isReady || !shouldHandleNewNoteShortcut(event)) {
+          return
+        }
+
+        startCreation('file', props.currentPath === null ? null : getParentPath(props.currentPath))
+      },
+      {
+        preventDefault: false,
+        stopPropagation: false,
+      },
+    )
+
+    document.addEventListener('keydown', handleNewNoteHotkey, true)
+
+    onCleanup(() => {
+      document.removeEventListener('keydown', handleNewNoteHotkey, true)
+    })
   }
 
   async function submitPendingCreation(name: string): Promise<string | null> {
