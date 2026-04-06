@@ -18,6 +18,7 @@ export function NotesSidebar(props: {
   fileCount: number
   isReady: boolean
   nodes: TreeNode[]
+  unsavedPath: string | null
   onAcceptTheirs(): void
   onCreateFolder(parentPath: string | null, name: string): Promise<string | null>
   onCreateNote(parentPath: string | null, name: string, submitSource: EntryEditorSubmitSource): Promise<string | null>
@@ -150,6 +151,7 @@ export function NotesSidebar(props: {
           currentPath={props.currentPath}
           parentPath={null}
           nodes={props.nodes}
+          unsavedPath={props.unsavedPath}
           onAcceptTheirs={props.onAcceptTheirs}
           pendingCreation={pendingCreation()}
           pendingRename={pendingRename()}

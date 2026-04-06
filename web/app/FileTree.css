@@ -55,6 +55,17 @@
         }
       }
 
+      >.tree-entry.tree-entry-unsaved {
+        >.tree-entry-unsaved-indicator {
+          width: 0.45rem;
+          height: 0.45rem;
+          flex: none;
+          border-radius: 999px;
+          background: #fbbf24;
+          box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.28);
+        }
+      }
+
       >.tree-entry.tree-entry-conflict {
         anchor-name: --tree-conflict-anchor;
       }

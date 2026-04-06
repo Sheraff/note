@@ -24,6 +24,7 @@ function renderSidebar(
     fileCount: entries.filter((entry) => entry.kind === 'file').length,
     isReady: true,
     nodes: buildTree(entries),
+    unsavedPath: null,
     onAcceptTheirs: vi.fn(),
     onCreateFolder: vi.fn(async () => null),
     onCreateNote: vi.fn(async () => null),
@@ -166,6 +167,46 @@ describe('NotesSidebar', () => {
     )
 
     expect(screen.getByRole('button', { name: 'today.md' }).getAttribute('aria-current')).toBe('true')
+  })
+
+  it('shows the unsaved indicator only on the current unsaved file row', () => {
+    renderSidebar(
+      {
+        currentPath: 'notes/today.md',
+        unsavedPath: 'notes/today.md',
+      },
+      [
+        { kind: 'directory', path: 'notes' },
+        { kind: 'file', path: 'notes/today.md' },
+        { kind: 'file', path: 'notes/tomorrow.md' },
+      ],
+    )
+
+    const unsavedButton = screen.getByRole('button', { name: 'today.md' })
+    const savedButton = screen.getByRole('button', { name: 'tomorrow.md' })
+
+    expect(unsavedButton.className).toContain('tree-entry-unsaved')
+    expect(unsavedButton.querySelector('.tree-entry-unsaved-indicator')).not.toBeNull()
+    expect(savedButton.className).not.toContain('tree-entry-unsaved')
+    expect(savedButton.querySelector('.tree-entry-unsaved-indicator')).toBeNull()
+  })
+
+  it('does not show the unsaved indicator when the current file is saved', () => {
+    renderSidebar(
+      {
+        currentPath: 'notes/today.md',
+        unsavedPath: null,
+      },
+      [
+        { kind: 'directory', path: 'notes' },
+        { kind: 'file', path: 'notes/today.md' },
+      ],
+    )
+
+    const noteButton = screen.getByRole('button', { name: 'today.md' })
+
+    expect(noteButton.className).not.toContain('tree-entry-unsaved')
+    expect(noteButton.querySelector('.tree-entry-unsaved-indicator')).toBeNull()
   })
 
   it('toggles a folder row closed and open again when clicked repeatedly', () => {

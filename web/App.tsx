@@ -111,6 +111,15 @@ function App() {
     return draftContent() !== snapshot.content
   })
   const hasKnownLocalChangesSinceSync = createMemo(() => hasUnsyncedWorkspaceChanges() || hasUnsavedDraftChanges())
+  const unsavedPath = createMemo(() => {
+    const path = currentPath()
+
+    if (path === null || !hasUnsavedDraftChanges() || noteConflict()?.path === path) {
+      return null
+    }
+
+    return path
+  })
   const storageLabel = createMemo(() => {
     const currentStorage = storage()
 
@@ -964,6 +973,7 @@ function App() {
           fileCount={fileCount()}
           isReady={storage() !== null}
           nodes={tree()}
+          unsavedPath={unsavedPath()}
           onAcceptTheirs={() => {
             void handleRestoreFromDisk().catch(reportError)
           }}

@@ -63,3 +63,34 @@ test('focuses the editor after creating a note with Enter from the sidebar', asy
   await page.keyboard.insertText(insertedText)
   await expect(page.locator('.monaco-editor .view-lines').last()).toContainText(insertedText)
 })
+
+test('shows an unsaved indicator while editing and clears it after saving', async ({ page }) => {
+  const runId = randomUUID()
+  const noteName = `unsaved-indicator-${runId}`
+
+  await installTestUserHeader(page, `notes-sidebar-unsaved-${runId}`)
+  await page.goto('/')
+  await waitForSyncIdle(page)
+
+  await page.getByRole('button', { name: 'New note', exact: true }).click()
+
+  const createInput = page.locator('.tree-row-editor input')
+
+  await expect(createInput).toBeFocused()
+  await createInput.fill(noteName)
+  await createInput.press('Enter')
+
+  const noteButton = page.getByRole('button', { name: `${noteName}.md`, exact: true })
+  const editorInput = await getPlainEditorInput(page)
+
+  await expect(noteButton).not.toHaveClass(/tree-entry-unsaved/)
+  await expect(editorInput).toBeFocused()
+
+  await page.keyboard.insertText('Unsaved changes')
+
+  await expect(noteButton).toHaveClass(/tree-entry-unsaved/)
+
+  await page.keyboard.press('ControlOrMeta+S')
+
+  await expect(noteButton).not.toHaveClass(/tree-entry-unsaved/)
+})

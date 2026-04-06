@@ -195,6 +195,7 @@ function FileNodeRow(props: {
   conflictPaths: string[]
   currentPath: string | null
   node: TreeNode
+  unsavedPath: string | null
   onAcceptTheirs(): void
   onDelete(path: string, kind: TreeNode['kind']): void
   onOpen(path: string): void
@@ -206,6 +207,7 @@ function FileNodeRow(props: {
 }) {
   const hasConflict = () => hasConflictPath(props.conflict, props.conflictPaths, props.node.path)
   const hasActiveConflict = () => props.conflict?.path === props.node.path
+  const hasUnsavedChanges = () => props.unsavedPath === props.node.path
   const popoverId = `tree-conflict-${props.node.path.replaceAll('/', '--')}`
   let hadFocus = false
   let renameArmed = false
@@ -224,6 +226,7 @@ function FileNodeRow(props: {
           'tree-entry': true,
           'tree-entry-has-conflict': hasConflict(),
           'tree-entry-conflict': hasActiveConflict(),
+          'tree-entry-unsaved': hasUnsavedChanges(),
         }}
         aria-current={props.currentPath === props.node.path ? 'true' : undefined}
         popovertarget={hasActiveConflict() ? popoverId : undefined}
@@ -268,6 +271,9 @@ function FileNodeRow(props: {
       >
         <Codicon name="file" />
         <span>{props.node.name}</span>
+        <Show when={hasUnsavedChanges()}>
+          <span class="tree-entry-unsaved-indicator" aria-hidden="true" />
+        </Show>
         <Show when={hasConflict()}>
           <Codicon name="alert" />
         </Show>
@@ -316,6 +322,7 @@ function DirectoryNode(props: {
   conflictPaths: string[]
   currentPath: string | null
   node: TreeNode
+  unsavedPath: string | null
   pendingCreation: PendingCreation | null
   pendingRename: PendingRename | null
   onAcceptTheirs(): void
@@ -425,6 +432,7 @@ function DirectoryNode(props: {
           currentPath={props.currentPath}
           parentPath={props.node.path}
           nodes={props.node.children}
+          unsavedPath={props.unsavedPath}
           onAcceptTheirs={props.onAcceptTheirs}
           pendingCreation={props.pendingCreation}
           pendingRename={props.pendingRename}
@@ -452,6 +460,7 @@ export function FileTree(props: {
   currentPath: string | null
   parentPath: string | null
   nodes: TreeNode[]
+  unsavedPath: string | null
   onAcceptTheirs(): void
   pendingCreation: PendingCreation | null
   pendingRename: PendingRename | null
@@ -499,6 +508,7 @@ export function FileTree(props: {
                   conflictPaths={props.conflictPaths}
                   currentPath={props.currentPath}
                   node={currentNode()}
+                  unsavedPath={props.unsavedPath}
                   onAcceptTheirs={props.onAcceptTheirs}
                   pendingCreation={props.pendingCreation}
                   pendingRename={props.pendingRename}
@@ -525,6 +535,7 @@ export function FileTree(props: {
                       conflictPaths={props.conflictPaths}
                       currentPath={props.currentPath}
                       node={currentNode()}
+                      unsavedPath={props.unsavedPath}
                       onAcceptTheirs={props.onAcceptTheirs}
                       onDelete={props.onDelete}
                       onOpen={props.onOpen}
