@@ -700,6 +700,143 @@ test('surfaces a local file conflict for the open attached-folder note after an 
   }
 })
 
+test('reloads repeated external saves for the open attached-folder note without restoring an older snapshot', async ({ browser }) => {
+  const runId = randomUUID()
+  const userId = `storage-external-repeat-${runId}`
+  const pickedFolderName = `picked-${runId}`
+  const notePath = `external-repeat-${runId}/open.md`
+  const firstExternalContent = '# Changed outside the app once\n'
+  const secondExternalContent = '# Changed outside the app twice\n'
+  const page = await createIsolatedStoragePage(browser, userId)
+
+  try {
+    await installDateNowHarness(page)
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [{ path: notePath, content: '# Before repeated external changes\n' }])
+    await ensureFileIsOpen(page, 'open.md')
+    await expectEditorToContain(page, '# Before repeated external changes')
+
+    await writePickedFolderFiles(page, [{ path: notePath, content: firstExternalContent }])
+    await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe(firstExternalContent)
+
+    await advanceDateNow(page, 11_000)
+
+    let syncResponsePromise = waitForNextSyncPush(page)
+    await dispatchWindowFocus(page)
+    await syncResponsePromise
+    await waitForSyncIdle(page)
+
+    await expectEditorToContain(page, '# Changed outside the app once')
+    await expect(page.getByRole('button', { name: new RegExp(`File conflict: ${RegExp.escape(notePath)}`) })).toHaveCount(0)
+
+    await writePickedFolderFiles(page, [{ path: notePath, content: secondExternalContent }])
+    await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe(secondExternalContent)
+
+    await advanceDateNow(page, 11_000)
+
+    syncResponsePromise = waitForNextSyncPush(page)
+    await dispatchWindowFocus(page)
+    await syncResponsePromise
+    await waitForSyncIdle(page)
+
+    await expect(page.getByRole('button', { name: 'open.md', exact: true })).toHaveAttribute('aria-current', 'true')
+    await expectEditorToContain(page, '# Changed outside the app twice')
+    await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe(secondExternalContent)
+    await expect(page.getByRole('button', { name: new RegExp(`File conflict: ${RegExp.escape(notePath)}`) })).toHaveCount(0)
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('falls back to the remaining note when the open attached-folder note is deleted externally and the draft is unchanged', async ({ browser }) => {
+  const runId = randomUUID()
+  const userId = `storage-external-delete-reload-${runId}`
+  const pickedFolderName = `picked-${runId}`
+  const remainingNotePath = `external-delete-${runId}/keep.md`
+  const deletedNotePath = `external-delete-${runId}/open.md`
+  const page = await createIsolatedStoragePage(browser, userId)
+
+  try {
+    await installDateNowHarness(page)
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [
+      { path: remainingNotePath, content: '# Keep this note\n' },
+      { path: deletedNotePath, content: '# Delete this note outside the app\n' },
+    ])
+    await ensureFileIsOpen(page, 'open.md')
+    await expectEditorToContain(page, '# Delete this note outside the app')
+
+    await deletePickedFolderEntry(page, deletedNotePath)
+    await expect.poll(async () => await readPickedFolderFile(page, deletedNotePath)).toBe(null)
+
+    await advanceDateNow(page, 11_000)
+
+    const syncResponsePromise = waitForNextSyncPush(page)
+    await dispatchWindowFocus(page)
+    await syncResponsePromise
+    await waitForSyncIdle(page)
+
+    await expect(page.getByRole('button', { name: 'open.md', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'keep.md', exact: true })).toHaveAttribute('aria-current', 'true')
+    await expectEditorToContain(page, '# Keep this note')
+    await expect.poll(async () => await readPickedFolderFile(page, deletedNotePath)).toBe(null)
+    await expect.poll(async () => await readPickedFolderFile(page, remainingNotePath)).toBe('# Keep this note\n')
+    await expect(page.getByRole('button', { name: new RegExp(`File conflict: ${RegExp.escape(deletedNotePath)}`) })).toHaveCount(0)
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('surfaces a local file conflict when the open attached-folder note is deleted externally with local edits', async ({ browser }) => {
+  const runId = randomUUID()
+  const userId = `storage-external-delete-conflict-${runId}`
+  const pickedFolderName = `picked-${runId}`
+  const deletedNotePath = `external-delete-conflict-${runId}/open.md`
+  const localDraft = '# Local draft kept in the app\n'
+  const page = await createIsolatedStoragePage(browser, userId)
+
+  try {
+    await installDateNowHarness(page)
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [{ path: deletedNotePath, content: '# Delete this note with local edits\n' }])
+    await ensureFileIsOpen(page, 'open.md')
+    await expectEditorToContain(page, '# Delete this note with local edits')
+
+    await deletePickedFolderEntry(page, deletedNotePath)
+    await expect.poll(async () => await readPickedFolderFile(page, deletedNotePath)).toBe(null)
+
+    await advanceDateNow(page, 11_000)
+    await replaceEditorContent(page, localDraft)
+    await dispatchWindowFocus(page)
+    await waitForSyncIdle(page)
+
+    await expect(page.getByRole('button', { name: new RegExp(`File conflict: ${RegExp.escape(deletedNotePath)}`) })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'open.md', exact: true })).toHaveAttribute('aria-current', 'true')
+    await expectEditorToContain(page, '# Local draft kept in the app')
+    await expect.poll(async () => await readPickedFolderFile(page, deletedNotePath)).toBe(null)
+  } finally {
+    await page.context().close()
+  }
+})
+
 test('keeps the current OPFS workspace active when attach folder permission is denied', async ({ page }) => {
   const runId = randomUUID()
   const noteName = `opfs-note-${runId}`
