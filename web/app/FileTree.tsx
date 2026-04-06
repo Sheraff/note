@@ -168,6 +168,16 @@ function conflictLabels(conflict: { labels: ConflictActionLabels; path: string }
   )
 }
 
+function getTreeNode(nodes: TreeNode[], path: string): TreeNode {
+  const node = nodes.find((candidate) => candidate.path === path)
+
+  if (node === undefined) {
+    throw new Error(`Missing tree node for path: ${path}`)
+  }
+
+  return node
+}
+
 function FileNodeRow(props: {
   conflict: { labels: ConflictActionLabels; path: string } | null
   currentPath: string | null
@@ -462,57 +472,77 @@ export function FileTree(props: {
           </li>
         )}
       </Show>
-      <For each={props.nodes}>
-        {(node) => (
-          <li>
-            {node.kind === 'directory' ? (
-              <DirectoryNode
-                conflict={props.conflict}
-                currentPath={props.currentPath}
-                node={node}
-                onAcceptTheirs={props.onAcceptTheirs}
-                pendingCreation={props.pendingCreation}
-                pendingRename={props.pendingRename}
-                onCancelAction={props.onCancelAction}
-                onCreateFolder={props.onCreateFolder}
-                onCreateNote={props.onCreateNote}
-                onDelete={props.onDelete}
-                onOpen={props.onOpen}
-                onOpenConflict={props.onOpenConflict}
-                onResolveInDiff={props.onResolveInDiff}
-                onSaveMine={props.onSaveMine}
-                onSaveMineSeparately={props.onSaveMineSeparately}
-                onStartRename={props.onStartRename}
-                onSubmitCreation={props.onSubmitCreation}
-                onSubmitRename={props.onSubmitRename}
-              />
-            ) : (
-              <Show when={props.pendingRename?.path === node.path ? props.pendingRename : null} keyed fallback={<FileNodeRow
-                conflict={props.conflict}
-                currentPath={props.currentPath}
-                node={node}
-                onAcceptTheirs={props.onAcceptTheirs}
-                onDelete={props.onDelete}
-                onOpen={props.onOpen}
-                onOpenConflict={props.onOpenConflict}
-                onResolveInDiff={props.onResolveInDiff}
-                onSaveMine={props.onSaveMine}
-                onSaveMineSeparately={props.onSaveMineSeparately}
-                onStartRename={props.onStartRename}
-              />}>
-                {(pendingRename) => (
-                  <EntryEditorRow
-                    kind={pendingRename.kind}
-                    initialValue={pendingRename.name}
-                    initialSelection={pendingRename.kind === 'file' ? 'basename' : 'all'}
-                    onCancel={props.onCancelAction}
-                    onSubmit={props.onSubmitRename}
-                  />
-                )}
-              </Show>
-            )}
-          </li>
-        )}
+      <For each={props.nodes.map((node) => node.path)}>
+        {(path) => {
+          let node = getTreeNode(props.nodes, path)
+
+          const currentNode = () => {
+            const nextNode = props.nodes.find((candidate) => candidate.path === path)
+
+            if (nextNode !== undefined) {
+              node = nextNode
+            }
+
+            return node
+          }
+
+          return (
+            <li>
+              {currentNode().kind === 'directory' ? (
+                <DirectoryNode
+                  conflict={props.conflict}
+                  currentPath={props.currentPath}
+                  node={currentNode()}
+                  onAcceptTheirs={props.onAcceptTheirs}
+                  pendingCreation={props.pendingCreation}
+                  pendingRename={props.pendingRename}
+                  onCancelAction={props.onCancelAction}
+                  onCreateFolder={props.onCreateFolder}
+                  onCreateNote={props.onCreateNote}
+                  onDelete={props.onDelete}
+                  onOpen={props.onOpen}
+                  onOpenConflict={props.onOpenConflict}
+                  onResolveInDiff={props.onResolveInDiff}
+                  onSaveMine={props.onSaveMine}
+                  onSaveMineSeparately={props.onSaveMineSeparately}
+                  onStartRename={props.onStartRename}
+                  onSubmitCreation={props.onSubmitCreation}
+                  onSubmitRename={props.onSubmitRename}
+                />
+              ) : (
+                <Show
+                  when={props.pendingRename?.path === path ? props.pendingRename : null}
+                  keyed
+                  fallback={
+                    <FileNodeRow
+                      conflict={props.conflict}
+                      currentPath={props.currentPath}
+                      node={currentNode()}
+                      onAcceptTheirs={props.onAcceptTheirs}
+                      onDelete={props.onDelete}
+                      onOpen={props.onOpen}
+                      onOpenConflict={props.onOpenConflict}
+                      onResolveInDiff={props.onResolveInDiff}
+                      onSaveMine={props.onSaveMine}
+                      onSaveMineSeparately={props.onSaveMineSeparately}
+                      onStartRename={props.onStartRename}
+                    />
+                  }
+                >
+                  {(pendingRename) => (
+                    <EntryEditorRow
+                      kind={pendingRename.kind}
+                      initialValue={pendingRename.name}
+                      initialSelection={pendingRename.kind === 'file' ? 'basename' : 'all'}
+                      onCancel={props.onCancelAction}
+                      onSubmit={props.onSubmitRename}
+                    />
+                  )}
+                </Show>
+              )}
+            </li>
+          )
+        }}
       </For>
     </ul>
   )

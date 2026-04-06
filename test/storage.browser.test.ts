@@ -526,6 +526,51 @@ async function createNoteFromSidebar(page: Page, name: string): Promise<string> 
   return notePath
 }
 
+async function createFolderFromSidebar(page: Page, name: string): Promise<string> {
+  await page.getByRole('button', { name: 'New folder', exact: true }).click()
+  await page.locator('.tree-row-editor input').fill(name)
+  await page.locator('.tree-row-editor input').press('Enter')
+
+  await expect(page.getByRole('button', { name, exact: true })).toBeVisible()
+  await waitForSyncIdle(page)
+
+  return name
+}
+
+async function createNoteInFolderFromSidebar(
+  page: Page,
+  folderPath: string,
+  name: string,
+  submitWith: 'enter' | 'blur',
+): Promise<string> {
+  const folderButton = page.getByRole('button', { name: folderPath, exact: true })
+
+  await expect(folderButton).toBeVisible()
+  await folderButton.hover()
+  await page.getByRole('button', { name: `New note in ${folderPath}`, exact: true }).click()
+
+  const input = page.locator('.tree-row-editor input')
+
+  await expect(input).toHaveValue('untitled.md')
+  await input.fill(name)
+
+  if (submitWith === 'enter') {
+    await input.press('Enter')
+  } else {
+    await page.locator('.sidebar header h2').click()
+  }
+
+  const notePath = `${folderPath}/${name}.md`
+  const noteButton = page.getByRole('button', { name: `${name}.md`, exact: true })
+
+  await expect(noteButton).toBeVisible()
+  await expect(noteButton).toHaveAttribute('aria-current', 'true')
+  await expectEditorToContain(page, '# Untitled')
+  await waitForSyncIdle(page)
+
+  return notePath
+}
+
 async function ensureFileIsOpen(page: Page, fileName: string): Promise<void> {
   const noteButton = page.getByRole('button', { name: fileName, exact: true })
 
@@ -621,6 +666,52 @@ test('creates and saves a note in an attached folder, then restores it after reo
   await expect(reopenedPage.getByRole('button', { name: pickedFolderName, exact: true })).toBeVisible()
   await expect(reopenedPage.getByRole('button', { name: notePath, exact: true })).toHaveAttribute('aria-current', 'true')
   await expectEditorToContain(reopenedPage, '# Stored in directory')
+})
+
+test('creates only the requested note in an empty folder when submitted with Enter', async ({ page }) => {
+  const runId = randomUUID()
+  const folderName = `empty-folder-${runId}`
+  const noteName = `created-${runId}`
+
+  await installStorageHarness(page, {
+    appOpfsRootName: `app-opfs-${runId}`,
+    pickedFolderName: `picked-${runId}`,
+    queryPermission: 'prompt',
+    requestPermission: 'granted',
+  })
+  await installTestUserHeader(page, `storage-page-${runId}`)
+
+  await attachPickedFolder(page)
+  await createFolderFromSidebar(page, folderName)
+
+  const notePath = await createNoteInFolderFromSidebar(page, folderName, noteName, 'enter')
+
+  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('# Untitled\n')
+  await expect.poll(async () => await readPickedFolderFile(page, `${folderName}/untitled.md`)).toBe(null)
+  await expect(page.getByRole('button', { name: 'untitled.md', exact: true })).toHaveCount(0)
+})
+
+test('creates only the requested note in an empty folder when submitted by blur', async ({ page }) => {
+  const runId = randomUUID()
+  const folderName = `empty-folder-${runId}`
+  const noteName = `created-${runId}`
+
+  await installStorageHarness(page, {
+    appOpfsRootName: `app-opfs-${runId}`,
+    pickedFolderName: `picked-${runId}`,
+    queryPermission: 'prompt',
+    requestPermission: 'granted',
+  })
+  await installTestUserHeader(page, `storage-page-${runId}`)
+
+  await attachPickedFolder(page)
+  await createFolderFromSidebar(page, folderName)
+
+  const notePath = await createNoteInFolderFromSidebar(page, folderName, noteName, 'blur')
+
+  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('# Untitled\n')
+  await expect.poll(async () => await readPickedFolderFile(page, `${folderName}/untitled.md`)).toBe(null)
+  await expect(page.getByRole('button', { name: 'untitled.md', exact: true })).toHaveCount(0)
 })
 
 test('reloads the open attached-folder note after an external file edit on focus when the draft is unchanged', async ({ browser }) => {

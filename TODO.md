@@ -10,9 +10,11 @@
 - [x] can we auto-sync? (once on page visibility visible, and on every save? or is there a more logical approach?)
 - [x] in the diff editor, can we add some text above the left and right halves to indicate "this is the state from the cloud" and "this is the current draft" (text to improve)? Since both halves are resizable, this text would have to either be rendered in solid, but aligned left and aligned right to avoid a resize of the diff messing it up, or rendered in monaco itself (but i don't know how customizable monaco is). Rendered in the editor is prefered if possible. Also on narrow screens, the diff is shown inline and not side-by-side, so we need to handle that case too
 - [x] there are situations where i'm typing and my cursor changes position. It seems sometimes the sync (maybe?) causes this change, even in situations where my note is in the latest version. In those cases the cursor is always reset to the topmost position. I think it happens if i edit the note *during* a sync.
-- [ ] is the "Dark 2026" theme available on monaco editor? if yes use it
-- [ ] when i create a new note in an empty folder, it creates the note i want AND an `untitled.md` note. It doesn't happen if i create it at the root, only inside a folder *that doesn't already have* an `untitled.md` note.
+- [x] is the "Dark 2026" theme available on monaco editor? if yes use it
+- [x] when i create a new note in an empty folder, it creates the note i want AND an `untitled.md` note. It doesn't happen if i create it at the root, only inside a folder *that doesn't already have* an `untitled.md` note.
 - [ ] "clicking a second time to enter rename mode" should only apply to files, not folders
+- [ ] when creating a new file we prefill the input with "untitled.md" and the entire input is pre-selected. We would like to only pre-select the "untitled" without the extension, so creating a new note is faster
+- [ ] add a cmd+N keyboard shortcut that will create a new note in the same folder that we are already in (or fallback to the root), it should immediately focus the input of the new note's name, like if we had clicked on the "new note" button
 - [ ] in the file tree, if a folder is closed, but contains files that have conflicts, there should be an indication on the folder
 - [ ] all (most?) buttons should have a keyboard shortcut (use tanstack/hotkeys)
 - [ ] if i'm editing a note in a separate editor (when using file system API) and the same note is open in this app, it should update in the app (currently, after editing if I go back to the app, it seems to remove all the changes I made on the external editor, this only happens if the note was open in both, but works fine if i had another note open in this app)
