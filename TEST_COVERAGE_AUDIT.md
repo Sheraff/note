@@ -3,13 +3,13 @@
 Current test stack:
 - Node-only Vitest tests in `test/files.test.ts`, `test/notes.test.ts`, `test/storage.test.ts`, `test/sync.test.ts`
 - No `@solidjs/testing-library` tests
-- Playwright browser tests in `test/playwright-demo.browser.test.ts` and `test/conflicts.browser.test.ts`
+- Playwright browser tests in `test/playwright-demo.browser.test.ts`, `test/conflicts.browser.test.ts`, and `test/storage.browser.test.ts`
 
 ## Features
 
 | Feature | Properly tested? | Need node-only unit tests? | Need `@solidjs/testing-library`? | Need Playwright? | Notes |
 |---|---:|---:|---:|---:|---|
-| OPFS + File System Access storage, attach, reconnect | no | yes | no | yes | `bootstrapWorkspace`/`reconnectFolder` are tested, but real storage operations and browser permission flows are not |
+| OPFS + File System Access storage, attach, reconnect | no | yes | no | no | Playwright attach/reconnect/startup/switch/error coverage now lives in `test/storage.browser.test.ts`; remaining gap is broader CRUD parity coverage, especially OPFS breadth |
 | Storage status/actions single control + popover | no | no | yes | yes | UI-only behavior |
 | Sync button + relative-time label | no | yes | yes | no | formatter/rendering is untested |
 | Sidebar action buttons + hover tree actions | no | no | yes | yes | hover/action wiring is untested |
@@ -17,7 +17,7 @@ Current test stack:
 | Rename flow + backend rename + open-path remap | no | yes | yes | yes | note-level rename logic is partly tested; backend implementations and UI are not |
 | File rename basename selection + second-click rename entry | no | no | no | yes | selection/focus behavior is browser-only |
 | Monaspace only in Monaco + Monaco worker boot | no | no | no | yes | needs real editor boot smoke |
-| Restore last-opened note + reconnect saved folder | no | no | no | yes | storage bootstrap is tested, but actual startup restore in the app is not |
+| Restore last-opened note + reconnect saved folder | yes | no | no | no | covered in `test/storage.browser.test.ts` |
 | Auto-sync after saves/mutations | no | no | no | yes | sync queue logic is tested, App-level trigger wiring is not |
 | Eager sync on startup/focus/visibility/online/polling | no | no | no | yes | browser lifecycle/timer behavior |
 | Manifest precheck when locally clean | yes | no | no | no | covered in `test/sync.test.ts` |
@@ -31,6 +31,7 @@ Current test stack:
 
 - Test: CRUD parity in both backends, attach/reconnect/switch flows, granted vs prompt permission states, and startup restore after persisted settings.
 - Read: `web/app/storage.ts`, `web/storage/file-system-access.ts`, `web/storage/opfs.ts`, `web/storage/metadata.ts`, `web/storage/types.ts`, `test/storage.test.ts`.
+- Status: Playwright attach/reconnect/startup/switch coverage is now in `test/storage.browser.test.ts`; remaining gap is broader CRUD parity in both backends.
 
 ### Storage status/actions single control + popover
 
@@ -71,6 +72,7 @@ Current test stack:
 
 - Test: startup restore of the saved path, reconnect restoring the same path, and the editor showing the note content without needing an extra click.
 - Read: `web/app/storage.ts`, `web/app/notes.ts`, `web/App.tsx`, `web/storage/metadata.ts`, `test/storage.test.ts`.
+- Status: covered in `test/storage.browser.test.ts`.
 
 ### Auto-sync after saves/mutations
 
@@ -110,8 +112,8 @@ Current test stack:
 
 | Bug fix | Properly tested? | Need node-only unit tests? | Need `@solidjs/testing-library`? | Need Playwright? | Notes |
 |---|---:|---:|---:|---:|---|
-| Previously selected note showed as open but content was not loaded on startup | no | no | no | yes | startup/Monaco mount race |
-| Fresh-session File System Access permission error on reopen | no | no | no | yes | current unit tests cover the decision logic, not the real browser failure mode |
+| Previously selected note showed as open but content was not loaded on startup | yes | no | no | no | covered in `test/storage.browser.test.ts` |
+| Fresh-session File System Access permission error on reopen | yes | no | no | no | covered in `test/storage.browser.test.ts` |
 | Inline create/rename failures should stay inline, not become global banner errors | no | no | yes | no | current tests only prove the banner is cleared |
 | Rename validation, duplicate target, same-name no-op, open-path remap | yes | no | no | no | well covered in `test/notes.test.ts` |
 | Server sync should not auto-create a conflict file | yes | no | no | no | covered in `test/sync.test.ts` |
@@ -124,5 +126,4 @@ Current test stack:
 
 ## Priority Gaps
 
-1. Playwright for OPFS/File System Access startup/reconnect flows
-2. Solid integration tests for `StatusBar`, `FileTree`, and `NotesSidebar`
+1. Solid integration tests for `StatusBar`, `FileTree`, and `NotesSidebar`
