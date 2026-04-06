@@ -751,7 +751,12 @@ function App() {
         return
       }
 
-      await attachFolder(storageContext)
+      const didAttachFolder = await attachFolder(storageContext)
+
+      if (!didAttachFolder) {
+        return
+      }
+
       await requestSync({ mode: 'full' })
     })().catch(reportError)
   }

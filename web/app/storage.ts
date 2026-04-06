@@ -21,6 +21,10 @@ export type StorageContext = {
   focusEditor(): void
 }
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError'
+}
+
 async function activateStorage(
   context: StorageContext,
   nextStorage: NoteStorage,
@@ -60,13 +64,23 @@ export async function bootstrapWorkspace(context: StorageContext) {
   context.setReconnectableDirectoryName(handle?.name ?? null)
 }
 
-export async function attachFolder(context: StorageContext) {
+export async function attachFolder(context: StorageContext): Promise<boolean> {
   if (!isDirectoryPickerSupported()) {
     context.setErrorMessage('This browser does not support the File System Access API.')
-    return
+    return false
   }
 
-  const handle = await pickDirectoryHandle()
+  let handle: FileSystemDirectoryHandle
+
+  try {
+    handle = await pickDirectoryHandle()
+  } catch (error) {
+    if (isAbortError(error)) {
+      return false
+    }
+
+    throw error
+  }
 
   if (!(await requestDirectoryPermission(handle))) {
     throw new Error('Folder access was not granted')
@@ -81,6 +95,8 @@ export async function attachFolder(context: StorageContext) {
       backend: 'directory',
     },
   )
+
+  return true
 }
 
 export async function reconnectFolder(context: StorageContext) {

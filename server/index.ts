@@ -45,7 +45,7 @@ export function createApp() {
   })
 
   app.get('/api/sync/manifest', (c) => {
-    const user = getCurrentUser()
+    const user = getCurrentUser(c.req.raw)
 
     return c.json(
       v.parse(ManifestResponseSchema, {
@@ -55,7 +55,7 @@ export function createApp() {
   })
 
   app.get('/api/sync/snapshot', (c) => {
-    const user = getCurrentUser()
+    const user = getCurrentUser(c.req.raw)
 
     return c.json(
       v.parse(SyncResponseSchema, {
@@ -67,7 +67,7 @@ export function createApp() {
 
   app.post('/api/sync/push', async (c) => {
     const body = v.parse(PushRequestSchema, await c.req.json())
-    const user = getCurrentUser()
+    const user = getCurrentUser(c.req.raw)
     const result = applyChanges(user.id, body.changes)
 
     return c.json(v.parse(SyncResponseSchema, result))

@@ -3,7 +3,7 @@
 Current test stack:
 - Node-only Vitest tests in `test/files.test.ts`, `test/notes.test.ts`, `test/storage.test.ts`, `test/sync.test.ts`
 - No `@solidjs/testing-library` tests
-- No Playwright tests
+- Playwright browser tests in `test/playwright-demo.browser.test.ts` and `test/conflicts.browser.test.ts`
 
 ## Features
 
@@ -21,9 +21,9 @@ Current test stack:
 | Auto-sync after saves/mutations | no | no | no | yes | sync queue logic is tested, App-level trigger wiring is not |
 | Eager sync on startup/focus/visibility/online/polling | no | no | no | yes | browser lifecycle/timer behavior |
 | Manifest precheck when locally clean | yes | no | no | no | covered in `test/sync.test.ts` |
-| Conflict detection + explicit choices + no auto conflict file | no | no | yes | yes | core conflict logic is tested; end-user flows are not |
-| Non-blocking conflict indicators in status bar/tree popovers | no | no | yes | yes | pure UI behavior |
-| Monaco diff workflow + responsive labels + diff toolbar/source-version actions | no | no | no | yes | Monaco/rendering/responsive behavior needs browser coverage |
+| Conflict detection + explicit choices + no auto conflict file | yes | no | no | no | local conflict helpers are unit-tested and remote end-user flows are covered in `test/conflicts.browser.test.ts` |
+| Non-blocking conflict indicators in status bar/tree popovers | yes | no | no | no | covered in `test/conflicts.browser.test.ts` for status bar, tree popover, unresolved editing, and cleanup |
+| Monaco diff workflow + responsive labels + diff toolbar/source-version actions | yes | no | no | no | covered in `test/conflicts.browser.test.ts` including re-entry, resolution actions, and narrow-viewport labels |
 
 ## Feature Explainers
 
@@ -91,17 +91,20 @@ Current test stack:
 
 - Test: local file conflicts, remote sync conflicts, each explicit resolution path, no automatic `*.conflict-*` creation, and multi-conflict handling.
 - Read: `web/app/notes.ts`, `web/app/sync.ts`, `web/notes/sync.ts`, `server/sync.ts`, `server/schemas.ts`, `web/App.tsx`, `test/sync.test.ts`, `test/notes.test.ts`, `test/files.test.ts`.
+- Status: covered by unit tests plus Playwright coverage in `test/conflicts.browser.test.ts`.
 
 ### Non-blocking conflict indicators in status bar/tree popovers
 
 - Test: conflict message in the status bar, conflict state in the tree, identical action sets from both entry points, continued editing while unresolved, and cleanup after resolution.
 - Read: `web/app/StatusBar.tsx`, `web/app/ConflictActions.tsx`, `web/app/NotesSidebar.tsx`, `web/app/FileTree.tsx`, `web/App.tsx`, `web/app/StatusBar.css`, `web/app/FileTree.css`.
+- Status: covered in `test/conflicts.browser.test.ts`.
 
 ### Monaco diff workflow + responsive labels + diff toolbar/source-version actions
 
 - Test: entering diff mode from a conflict, leaving and returning to the same unresolved conflict, switching to another note, all diff resolution actions, responsive toolbar/layout behavior, and inline vs side-by-side labels.
 - Read: `web/App.tsx`, `web/app/EditorPane.tsx`, `web/app/EditorPane.css`, `web/editor/monaco.ts`, `web/editor/monaco-diff.css`, `web/app/ConflictActions.tsx`.
 - Optional resource: Monaco diff editor API docs for `monaco.editor.createDiffEditor(...)`.
+- Status: covered in `test/conflicts.browser.test.ts`.
 
 ## Bug Fixes
 
@@ -115,12 +118,11 @@ Current test stack:
 | Sync overlap/racing | yes | no | no | no | covered in `test/sync.test.ts` |
 | Cursor jumps to top while typing during sync | no | no | no | yes | cursor/selection stability needs a real editor |
 | False cloud conflict / empty diff when local already matched remote | yes | no | no | no | covered in `test/sync.test.ts` |
-| Conflict persistence and back-to-back conflict state handling | no | no | yes | yes | App-level unresolved-conflict state transitions are untested |
-| Clicking the status-bar conflict, leaving diff mode, and returning to normal editor after resolution | no | no | yes | yes | UI event/state flow |
+| Conflict persistence and back-to-back conflict state handling | yes | no | no | no | covered in `test/conflicts.browser.test.ts` including queued conflicts and re-entry |
+| Clicking the status-bar conflict, leaving diff mode, and returning to normal editor after resolution | yes | no | no | no | covered in `test/conflicts.browser.test.ts` |
 | Diff toolbar/layout regressions: overlap, 5px editor collapse, intent colors | no | no | no | yes | layout/responsive CSS needs browser coverage |
 
 ## Priority Gaps
 
-1. Playwright for Monaco/conflict flows
-2. Playwright for OPFS/File System Access startup/reconnect flows
-3. Solid integration tests for `StatusBar`, `FileTree`, and `NotesSidebar`
+1. Playwright for OPFS/File System Access startup/reconnect flows
+2. Solid integration tests for `StatusBar`, `FileTree`, and `NotesSidebar`
