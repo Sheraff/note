@@ -478,11 +478,23 @@ async function createNoteFromSidebar(page: Page, name: string): Promise<string> 
   return notePath
 }
 
+async function ensureFileIsOpen(page: Page, fileName: string): Promise<void> {
+  const noteButton = page.getByRole('button', { name: fileName, exact: true })
+
+  await expect(noteButton).toBeVisible()
+
+  if ((await noteButton.getAttribute('aria-current')) !== 'true') {
+    await page.locator('.monaco-editor').last().click({ position: { x: 120, y: 24 } })
+    await noteButton.click()
+  }
+
+  await expect(noteButton).toHaveAttribute('aria-current', 'true')
+}
+
 async function enterRenameModeFromFocusedOpenFile(page: Page, fileName: string): Promise<void> {
   const noteButton = page.getByRole('button', { name: fileName, exact: true })
 
-  await noteButton.click()
-  await expect(noteButton).toHaveAttribute('aria-current', 'true')
+  await ensureFileIsOpen(page, fileName)
   await noteButton.focus()
   await noteButton.click()
 }
@@ -708,8 +720,7 @@ test('deletes the open note from an attached folder and falls back to the remain
     const deletedNoteButton = page.getByRole('button', { name: `remove-${runId}.md`, exact: true })
     const remainingNoteButton = page.getByRole('button', { name: `keep-${runId}.md`, exact: true })
 
-    await deletedNoteButton.click()
-    await expect(deletedNoteButton).toHaveAttribute('aria-current', 'true')
+    await ensureFileIsOpen(page, `remove-${runId}.md`)
     await expectEditorToContain(page, '# Remove me')
 
     page.once('dialog', async (dialog) => {
@@ -891,13 +902,10 @@ test('renames the open note in an attached folder and restores the renamed path 
     const originalNoteButton = page.getByRole('button', { name: `before-${runId}.md`, exact: true })
     const siblingNoteButton = page.getByRole('button', { name: `sibling-${runId}.md`, exact: true })
 
-    await page.locator('.monaco-editor').last().click({ position: { x: 120, y: 24 } })
-    await siblingNoteButton.click()
-    await expect(siblingNoteButton).toHaveAttribute('aria-current', 'true')
+    await ensureFileIsOpen(page, `sibling-${runId}.md`)
     await expectEditorToContain(page, '# Leave me alone')
 
-    await originalNoteButton.click()
-    await expect(originalNoteButton).toHaveAttribute('aria-current', 'true')
+    await ensureFileIsOpen(page, `before-${runId}.md`)
     await expectEditorToContain(page, '# Rename me')
 
     await originalNoteButton.focus()
@@ -954,20 +962,13 @@ test('falls back to the remaining note on startup when the saved path is missing
       { path: missingNotePath, content: '# Open me first\n' },
     ])
 
-    const missingNoteButton = page.getByRole('button', { name: `gone-${runId}.md`, exact: true })
-    const remainingNoteButton = page.getByRole('button', { name: `keep-${runId}.md`, exact: true })
-
-    await page.locator('.monaco-editor').last().click({ position: { x: 120, y: 24 } })
-    await remainingNoteButton.click()
-    await expect(remainingNoteButton).toHaveAttribute('aria-current', 'true')
+    await ensureFileIsOpen(page, `keep-${runId}.md`)
     await expectEditorToContain(page, '# Keep on startup')
-    await missingNoteButton.click()
-    await expect(missingNoteButton).toHaveAttribute('aria-current', 'true')
+    await ensureFileIsOpen(page, `gone-${runId}.md`)
     await expectEditorToContain(page, '# Open me first')
     await expect.poll(async () => (await readStoredAppSettings(page))?.lastOpenedPath).toBe(missingNotePath)
 
-    await remainingNoteButton.click()
-    await expect(remainingNoteButton).toHaveAttribute('aria-current', 'true')
+    await ensureFileIsOpen(page, `keep-${runId}.md`)
     await expectEditorToContain(page, '# Keep on startup')
     await updateStoredAppSettings(page, {
       backend: 'directory',

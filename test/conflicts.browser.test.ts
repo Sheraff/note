@@ -532,9 +532,8 @@ async function setupMultipleRemoteConflicts(page: Page, request: APIRequestConte
     await expect.poll(async () => (await getRemoteFile(request, file.path, effectiveUserId))?.content ?? null).toBe(baseContent)
   }
 
-  await page.reload()
+  await reloadAndWaitForSync(page)
   await expect(page).toHaveTitle('Note')
-  await waitForSyncIdle(page)
   await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual(files.map((file) => file.path).sort())
 
   for (const file of files) {

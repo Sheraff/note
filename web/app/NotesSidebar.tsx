@@ -41,10 +41,7 @@ export function NotesSidebar(props: {
 
   function startRename(path: string, kind: TreeNode['kind'], name: string) {
     setPendingCreation(null)
-
-    queueMicrotask(() => {
-      setPendingRename({ path, kind, name })
-    })
+    setPendingRename({ path, kind, name })
   }
 
   async function submitPendingCreation(name: string): Promise<string | null> {

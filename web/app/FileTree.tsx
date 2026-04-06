@@ -117,6 +117,7 @@ function EntryEditorRow(props: {
             void submit()
           }}
           onInput={(event) => {
+            allowBlurHandling = true
             setValue(event.currentTarget.value)
             setErrorMessage(null)
           }}

@@ -2,23 +2,23 @@
 
 Current test stack:
 - Node-only Vitest tests in `test/files.test.ts`, `test/notes.test.ts`, `test/storage.test.ts`, `test/sync.test.ts`
-- No `@solidjs/testing-library` tests
-- Playwright browser tests in `test/playwright-demo.browser.test.ts`, `test/conflicts.browser.test.ts`, and `test/storage.browser.test.ts`
+- `@solidjs/testing-library` tests in `test/statusbar.solid.test.tsx` and `test/notes-sidebar.solid.test.tsx`
+- Playwright browser tests in `test/playwright-demo.browser.test.ts`, `test/conflicts.browser.test.ts`, `test/storage.browser.test.ts`, and `test/sync.browser.test.ts`
 
 ## Features
 
 | Feature | Properly tested? | Need node-only unit tests? | Need `@solidjs/testing-library`? | Need Playwright? | Notes |
 |---|---:|---:|---:|---:|---|
 | OPFS + File System Access storage, attach, reconnect | no | yes | no | no | Playwright attach/reconnect/startup/switch/error coverage now lives in `test/storage.browser.test.ts`; remaining gap is broader CRUD parity coverage, especially OPFS breadth |
-| Storage status/actions single control + popover | no | no | yes | yes | UI-only behavior |
-| Sync button + relative-time label | no | yes | yes | no | formatter/rendering is untested |
-| Sidebar action buttons + hover tree actions | no | no | yes | yes | hover/action wiring is untested |
-| Inline file/folder creation in the tree | no | yes | yes | yes | only error-path logic is covered now |
-| Rename flow + backend rename + open-path remap | no | yes | yes | yes | note-level rename logic is partly tested; backend implementations and UI are not |
-| File rename basename selection + second-click rename entry | no | no | no | yes | selection/focus behavior is browser-only |
+| Storage status/actions single control + popover | yes | no | no | no | covered by `test/statusbar.solid.test.tsx` and `test/storage.browser.test.ts` |
+| Sync button + relative-time label | yes | no | no | no | covered by `test/statusbar.solid.test.tsx` |
+| Sidebar action buttons + hover tree actions | yes | no | no | no | covered by `test/notes-sidebar.solid.test.tsx` plus hover coverage in `test/storage.browser.test.ts` |
+| Inline file/folder creation in the tree | no | yes | no | yes | Solid flow coverage now lives in `test/notes-sidebar.solid.test.tsx`; remaining gap is broader app/backend coverage, especially successful refresh/open parity in real storage backends |
+| Rename flow + backend rename + open-path remap | no | yes | no | yes | note-level rename logic and UI flows are covered; remaining gap is direct backend coverage in both storage backends and broader browser parity |
+| File rename basename selection + second-click rename entry | yes | no | no | no | covered in `test/storage.browser.test.ts` |
 | Monaspace only in Monaco + Monaco worker boot | no | no | no | yes | needs real editor boot smoke |
 | Restore last-opened note + reconnect saved folder | yes | no | no | no | covered in `test/storage.browser.test.ts` |
-| Auto-sync after saves/mutations | no | no | no | yes | sync queue logic is tested, App-level trigger wiring is not |
+| Auto-sync after saves/mutations | yes | no | no | no | covered in `test/sync.browser.test.ts` for save/create/folder-create/rename/delete/manual-save wiring, conflict short-circuits, and dirty-state clearing |
 | Eager sync on startup/focus/visibility/online/polling | no | no | no | yes | browser lifecycle/timer behavior |
 | Manifest precheck when locally clean | yes | no | no | no | covered in `test/sync.test.ts` |
 | Conflict detection + explicit choices + no auto conflict file | yes | no | no | no | local conflict helpers are unit-tested and remote end-user flows are covered in `test/conflicts.browser.test.ts` |
@@ -37,31 +37,37 @@ Current test stack:
 
 - Test: storage button label state, popover actions, disabled states, reconnect visibility, and callback wiring.
 - Read: `web/app/StatusBar.tsx`, `web/app/StatusBar.css`, `web/App.tsx`, `web/app/storage.ts`.
+- Status: covered by `test/statusbar.solid.test.tsx` plus storage popover browser coverage in `test/storage.browser.test.ts`.
 
 ### Sync button + relative-time label
 
 - Test: relative label formatting over time, busy/disabled states while syncing, tooltip timestamp, and manual sync button wiring.
 - Read: `web/app/StatusBar.tsx`, `web/app/StatusBar.css`, `web/App.tsx`, `web/app/sync.ts`.
+- Status: covered in `test/statusbar.solid.test.tsx`.
 
 ### Sidebar action buttons + hover tree actions
 
 - Test: header actions when storage is ready or missing, file vs folder hover actions, delete/rename/create wiring, and correct open behavior.
 - Read: `web/app/NotesSidebar.tsx`, `web/app/FileTree.tsx`, `web/app/FileTree.css`, `web/notes/tree.ts`, `web/App.tsx`.
+- Status: covered by `test/notes-sidebar.solid.test.tsx` plus hover browser coverage in `test/storage.browser.test.ts`.
 
 ### Inline file/folder creation in the tree
 
 - Test: root vs folder insertion, enter and blur submit, escape cancel, inline validation messages, and successful refresh/open behavior.
 - Read: `web/app/NotesSidebar.tsx`, `web/app/FileTree.tsx`, `web/app/notes.ts`, `web/notes/paths.ts`, `web/app/FileTree.css`, `test/notes.test.ts`.
+- Status: Solid flow coverage now lives in `test/notes-sidebar.solid.test.tsx`; remaining gap is broader create success coverage against real storage backends.
 
 ### Rename flow + backend rename + open-path remap
 
 - Test: file and folder rename in both backends, descendant remapping, open-note remapping, invalid names, duplicate targets, no-op rename, and post-rename refresh.
 - Read: `web/app/notes.ts`, `web/storage/file-system-access.ts`, `web/storage/opfs.ts`, `web/storage/types.ts`, `web/notes/paths.ts`, `test/notes.test.ts`.
+- Status: note-level rename logic plus UI flows are covered; remaining gap is direct backend coverage in `web/storage/file-system-access.ts` and `web/storage/opfs.ts`.
 
 ### File rename basename selection + second-click rename entry
 
 - Test: second-click rename entry behavior, initial selection excluding the extension for files, and focus behavior around repeated clicks.
 - Read: `web/app/FileTree.tsx`, `web/app/FileTree.css`, `TODO.md`.
+- Status: covered in `test/storage.browser.test.ts`.
 
 ### Monaspace only in Monaco + Monaco worker boot
 
@@ -78,6 +84,7 @@ Current test stack:
 
 - Test: save/create/rename/delete queue sync exactly once, sync is skipped when save hits a conflict, and dirty-state tracking clears only after successful full sync.
 - Read: `web/App.tsx`, `web/app/sync.ts`, `web/app/notes.ts`, `test/sync.test.ts`, `test/notes.test.ts`.
+- Status: covered in `test/sync.browser.test.ts`; lower-level queue logic remains covered in `test/sync.test.ts`.
 
 ### Eager sync on startup/focus/visibility/online/polling
 
@@ -114,7 +121,7 @@ Current test stack:
 |---|---:|---:|---:|---:|---|
 | Previously selected note showed as open but content was not loaded on startup | yes | no | no | no | covered in `test/storage.browser.test.ts` |
 | Fresh-session File System Access permission error on reopen | yes | no | no | no | covered in `test/storage.browser.test.ts` |
-| Inline create/rename failures should stay inline, not become global banner errors | no | no | yes | no | current tests only prove the banner is cleared |
+| Inline create/rename failures should stay inline, not become global banner errors | yes | no | no | no | helper coverage remains in `test/notes.test.ts`; inline UI coverage now lives in `test/notes-sidebar.solid.test.tsx` |
 | Rename validation, duplicate target, same-name no-op, open-path remap | yes | no | no | no | well covered in `test/notes.test.ts` |
 | Server sync should not auto-create a conflict file | yes | no | no | no | covered in `test/sync.test.ts` |
 | Sync overlap/racing | yes | no | no | no | covered in `test/sync.test.ts` |
@@ -126,4 +133,4 @@ Current test stack:
 
 ## Priority Gaps
 
-1. Solid integration tests for `StatusBar`, `FileTree`, and `NotesSidebar`
+1. [x] Solid integration tests for `StatusBar`, `FileTree`, and `NotesSidebar`
