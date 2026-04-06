@@ -9,7 +9,7 @@ Current test stack:
 
 | Feature | Properly tested? | Need node-only unit tests? | Need `@solidjs/testing-library`? | Need Playwright? | Notes |
 |---|---:|---:|---:|---:|---|
-| OPFS + File System Access storage, attach, reconnect | no | yes | no | no | Playwright attach/reconnect/startup/switch/error coverage now lives in `test/storage.browser.test.ts`; remaining gap is broader CRUD parity coverage, especially OPFS breadth |
+| OPFS + File System Access storage, attach, reconnect | yes | no | no | no | covered by direct CRUD parity/unit coverage in `test/storage.test.ts` plus attach/reconnect/startup/switch/error browser coverage in `test/storage.browser.test.ts` |
 | Storage status/actions single control + popover | yes | no | no | no | covered by `test/statusbar.solid.test.tsx` and `test/storage.browser.test.ts` |
 | Sync button + relative-time label | yes | no | no | no | covered by `test/statusbar.solid.test.tsx` |
 | Sidebar action buttons + hover tree actions | yes | no | no | no | covered by `test/notes-sidebar.solid.test.tsx` plus hover coverage in `test/storage.browser.test.ts` |
@@ -31,7 +31,7 @@ Current test stack:
 
 - Test: CRUD parity in both backends, attach/reconnect/switch flows, granted vs prompt permission states, and startup restore after persisted settings.
 - Read: `web/app/storage.ts`, `web/storage/file-system-access.ts`, `web/storage/opfs.ts`, `web/storage/metadata.ts`, `web/storage/types.ts`, `test/storage.test.ts`.
-- Status: Playwright attach/reconnect/startup/switch coverage is now in `test/storage.browser.test.ts`; remaining gap is broader CRUD parity in both backends.
+- Status: covered by direct CRUD parity and storage edge-case coverage in `test/storage.test.ts` plus attach/reconnect/startup/switch/error browser coverage in `test/storage.browser.test.ts`.
 
 ### Storage status/actions single control + popover
 

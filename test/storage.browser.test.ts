@@ -369,7 +369,16 @@ async function updateStoredAppSettings(
   }, updates)
 }
 
+async function waitForStorageLabelToSettle(page: Page): Promise<void> {
+  const storageButton = page.locator('.statusbar-storage > .statusbar-button')
+
+  await expect(storageButton).toBeVisible()
+  await expect.poll(async () => (await storageButton.textContent())?.trim() ?? '').not.toBe('Loading...')
+}
+
 async function waitForSyncIdle(page: Page): Promise<void> {
+  await waitForStorageLabelToSettle(page)
+
   const syncButton = page.getByRole('button', { name: /^Sync/ })
   await expect(syncButton).toBeVisible()
   await expect.poll(async () => await syncButton.getAttribute('aria-busy')).not.toBe('true')
@@ -416,6 +425,7 @@ async function reopenAppWithHarness(page: Page, config: FakeDirectoryConfig): Pr
   await page.close()
   await nextPage.goto('/')
   await expect(nextPage).toHaveTitle('Note')
+  await waitForStorageLabelToSettle(nextPage)
   return nextPage
 }
 
@@ -430,12 +440,23 @@ async function attachPickedFolder(
   await expect(page).toHaveTitle('Note')
   await waitForSyncIdle(page)
 
+  const pickedFolderName = await page.evaluate(() => {
+    const testApi = (globalThis as unknown as {
+      __noteStorageBrowserTest: {
+        readConfig(): { pickedFolderName: string }
+      }
+    }).__noteStorageBrowserTest
+
+    return testApi.readConfig().pickedFolderName
+  })
+
   if (files.length > 0) {
     await writePickedFolderFiles(page, files)
   }
 
   await page.getByRole('button', { name: 'OPFS', exact: true }).click()
   await page.getByRole('button', { name: 'Attach folder' }).click()
+  await expect(page.locator('.statusbar-storage').getByRole('button', { name: pickedFolderName, exact: true })).toBeVisible()
   await waitForSyncIdle(page)
 }
 

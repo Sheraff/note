@@ -9,6 +9,7 @@ export default defineConfig({
   use: {
     baseURL,
   },
+  workers: 4,
   webServer: {
     command: `node dist/server/server.js --port ${port}`,
     url: `${baseURL}/api/health`,
