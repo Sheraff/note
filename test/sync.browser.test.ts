@@ -159,18 +159,24 @@ async function expectEditorToContain(page: Page, text: string): Promise<void> {
   await expect(page.locator('.monaco-editor .view-lines').last()).toContainText(text)
 }
 
-async function replaceEditorContent(page: Page, content: string): Promise<void> {
+async function focusPlainEditorInput(page: Page): Promise<void> {
   const editor = page.locator('.monaco-editor').last()
   const namedInput = editor.getByRole('textbox', { name: 'Editor content' })
   const input = (await namedInput.count()) > 0 ? namedInput.first() : editor.getByRole('textbox').last()
+
+  await expect(editor).toBeVisible()
+  await editor.click({ position: { x: 120, y: 24 } })
+  await input.focus()
+}
+
+async function replaceEditorContent(page: Page, content: string): Promise<void> {
+  const editor = page.locator('.monaco-editor').last()
   const expectedLines = content
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
 
-  await expect(editor).toBeVisible()
-  await editor.click({ position: { x: 120, y: 24 } })
-  await input.focus()
+  await focusPlainEditorInput(page)
   await page.keyboard.press('ControlOrMeta+A')
   await page.keyboard.press('Backspace')
   await page.keyboard.insertText(content)
@@ -445,6 +451,219 @@ test('auto-syncs exactly once after an editor save', async ({ page, request }) =
 
   expect(syncRequests).toEqual({ manifest: 0, push: 1 })
   await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe(updatedContent)
+})
+
+test('keeps the Monaco cursor position stable while autosave and sync run', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-cursor-${runId}`
+  const path = `sync-cursor-${runId}/cursor.md`
+  const baseContent = '# Header\nFirst paragraph\nTarget line\n'
+  const expectedContent = '# Header\nFirst paragraph\n[first][second]Target line\n'
+
+  await setupSyncedWorkspace(page, request, [{ path, content: baseContent }], userId)
+
+  const noteButton = page.getByRole('button', { name: 'cursor.md', exact: true })
+
+  await expect(noteButton).toBeVisible()
+  await expect(noteButton).toHaveAttribute('aria-current', 'true')
+  await expectEditorToContain(page, 'Target line')
+
+  await focusPlainEditorInput(page)
+  await page.keyboard.press('ControlOrMeta+Home')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+
+  const firstSyncRequests = await countSyncRequestsDuring(page, async () => {
+    await page.keyboard.insertText('[first]')
+  })
+
+  expect(firstSyncRequests).toEqual({ manifest: 0, push: 1 })
+
+  const secondSyncRequests = await countSyncRequestsDuring(page, async () => {
+    await page.keyboard.insertText('[second]')
+  })
+
+  expect(secondSyncRequests).toEqual({ manifest: 0, push: 1 })
+  await expectEditorToContain(page, '[first][second]Target line')
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(expectedContent)
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(expectedContent)
+})
+
+test('keeps the Monaco cursor column stable within a line while autosave and sync run', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-cursor-column-${runId}`
+  const path = `sync-cursor-column-${runId}/cursor-column.md`
+  const baseContent = '# Header\nLine before\nAlpha Beta Gamma\n'
+  const expectedContent = '# Header\nLine before\nAlpha [first][second]Beta Gamma\n'
+
+  await setupSyncedWorkspace(page, request, [{ path, content: baseContent }], userId)
+
+  const noteButton = page.getByRole('button', { name: 'cursor-column.md', exact: true })
+
+  await expect(noteButton).toBeVisible()
+  await expect(noteButton).toHaveAttribute('aria-current', 'true')
+  await expectEditorToContain(page, 'Alpha Beta Gamma')
+
+  await focusPlainEditorInput(page)
+  await page.keyboard.press('ControlOrMeta+Home')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+
+  for (let step = 0; step < 'Alpha '.length; step += 1) {
+    await page.keyboard.press('ArrowRight')
+  }
+
+  const firstSyncRequests = await countSyncRequestsDuring(page, async () => {
+    await page.keyboard.insertText('[first]')
+  })
+
+  expect(firstSyncRequests).toEqual({ manifest: 0, push: 1 })
+
+  const secondSyncRequests = await countSyncRequestsDuring(page, async () => {
+    await page.keyboard.insertText('[second]')
+  })
+
+  expect(secondSyncRequests).toEqual({ manifest: 0, push: 1 })
+  await expectEditorToContain(page, 'Alpha [first][second]Beta Gamma')
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(expectedContent)
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(expectedContent)
+})
+
+test('keeps the Monaco selection stable while autosave and sync run', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-selection-${runId}`
+  const path = `sync-selection-${runId}/selection.md`
+  const baseContent = '# Header\nLine before\nAlpha Beta Gamma\n'
+  const selectedToken = 'selected '
+  const replacementToken = 'replaced '
+  const expectedContent = '# Header\nLine before\nAlpha replaced Beta Gamma\n'
+
+  await setupSyncedWorkspace(page, request, [{ path, content: baseContent }], userId)
+
+  const noteButton = page.getByRole('button', { name: 'selection.md', exact: true })
+
+  await expect(noteButton).toBeVisible()
+  await expect(noteButton).toHaveAttribute('aria-current', 'true')
+  await expectEditorToContain(page, 'Alpha Beta Gamma')
+
+  await focusPlainEditorInput(page)
+  await page.keyboard.press('ControlOrMeta+Home')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+
+  for (let step = 0; step < 'Alpha '.length; step += 1) {
+    await page.keyboard.press('ArrowRight')
+  }
+
+  const firstSyncRequests = await countSyncRequestsDuring(page, async () => {
+    await page.keyboard.insertText(selectedToken)
+
+    await page.keyboard.down('Shift')
+
+    for (let step = 0; step < selectedToken.length; step += 1) {
+      await page.keyboard.press('ArrowLeft')
+    }
+
+    await page.keyboard.up('Shift')
+  })
+
+  expect(firstSyncRequests).toEqual({ manifest: 0, push: 1 })
+
+  const secondSyncRequests = await countSyncRequestsDuring(page, async () => {
+    await page.keyboard.insertText(replacementToken)
+  })
+
+  expect(secondSyncRequests).toEqual({ manifest: 0, push: 1 })
+  await expectEditorToContain(page, 'Alpha replaced Beta Gamma')
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(expectedContent)
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(expectedContent)
+})
+
+test('keeps typing at the same cursor position after a manual keyboard save', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-keyboard-continue-${runId}`
+  const path = `sync-keyboard-continue-${runId}/keyboard-continue.md`
+  const baseContent = '# Header\nLine before\nAlpha Beta Gamma\n'
+  const expectedContent = '# Header\nLine before\nAlpha [first][second]Beta Gamma\n'
+
+  await setupSyncedWorkspace(page, request, [{ path, content: baseContent }], userId)
+
+  const noteButton = page.getByRole('button', { name: 'keyboard-continue.md', exact: true })
+
+  await expect(noteButton).toBeVisible()
+  await expect(noteButton).toHaveAttribute('aria-current', 'true')
+  await expectEditorToContain(page, 'Alpha Beta Gamma')
+
+  await focusPlainEditorInput(page)
+  await page.keyboard.press('ControlOrMeta+Home')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+
+  for (let step = 0; step < 'Alpha '.length; step += 1) {
+    await page.keyboard.press('ArrowRight')
+  }
+
+  const manualSaveRequests = await countSyncRequestsDuring(page, async () => {
+    await page.keyboard.insertText('[first]')
+    await page.keyboard.press('ControlOrMeta+S')
+  })
+
+  expect(manualSaveRequests).toEqual({ manifest: 0, push: 1 })
+
+  const continuedTypingRequests = await countSyncRequestsDuring(page, async () => {
+    await page.keyboard.insertText('[second]')
+  })
+
+  expect(continuedTypingRequests).toEqual({ manifest: 0, push: 1 })
+  await expectEditorToContain(page, 'Alpha [first][second]Beta Gamma')
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(expectedContent)
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(expectedContent)
+})
+
+test('keeps typing at the same cursor position after a lifecycle-triggered sync', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-lifecycle-continue-${runId}`
+  const path = `sync-lifecycle-continue-${runId}/lifecycle-continue.md`
+  const baseContent = '# Header\nLine before\nAlpha Beta Gamma\n'
+  const expectedContent = '# Header\nLine before\nAlpha [first][second]Beta Gamma\n'
+
+  await installDateNowHarness(page)
+  await setupSyncedWorkspace(page, request, [{ path, content: baseContent }], userId)
+
+  const noteButton = page.getByRole('button', { name: 'lifecycle-continue.md', exact: true })
+
+  await expect(noteButton).toBeVisible()
+  await expect(noteButton).toHaveAttribute('aria-current', 'true')
+  await expectEditorToContain(page, 'Alpha Beta Gamma')
+
+  await focusPlainEditorInput(page)
+  await page.keyboard.press('ControlOrMeta+Home')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+
+  for (let step = 0; step < 'Alpha '.length; step += 1) {
+    await page.keyboard.press('ArrowRight')
+  }
+
+  await page.keyboard.insertText('[first]')
+  await advanceDateNow(page, 11_000)
+
+  const lifecycleSyncRequests = await countSyncRequestsDuring(page, async () => {
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event('focus'))
+    })
+  })
+
+  expect(lifecycleSyncRequests).toEqual({ manifest: 0, push: 1 })
+
+  const continuedTypingRequests = await countSyncRequestsDuring(page, async () => {
+    await page.keyboard.insertText('[second]')
+  })
+
+  expect(continuedTypingRequests).toEqual({ manifest: 0, push: 1 })
+  await expectEditorToContain(page, 'Alpha [first][second]Beta Gamma')
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(expectedContent)
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(expectedContent)
 })
 
 test('flushes a pending save into the create-note sync without a second push', async ({ page, request }) => {

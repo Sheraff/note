@@ -228,18 +228,24 @@ async function countSyncRequestsDuring(page: Page, action: () => Promise<void>):
   return requestCount
 }
 
-async function replaceEditorContent(page: Page, content: string, options: { diff?: boolean } = {}): Promise<void> {
+async function focusEditorInput(page: Page, options: { diff?: boolean } = {}): Promise<void> {
   const editor = page.locator(options.diff ? '.monaco-diff-editor .editor.modified' : '.monaco-editor').last()
   const namedInput = editor.getByRole('textbox', { name: 'Editor content' })
   const input = (await namedInput.count()) > 0 ? namedInput.first() : editor.getByRole('textbox').last()
+
+  await expect(editor).toBeVisible()
+  await editor.click({ position: { x: 120, y: 24 } })
+  await input.focus()
+}
+
+async function replaceEditorContent(page: Page, content: string, options: { diff?: boolean } = {}): Promise<void> {
+  const editor = page.locator(options.diff ? '.monaco-diff-editor .editor.modified' : '.monaco-editor').last()
   const expectedLines = content
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
 
-  await expect(editor).toBeVisible()
-  await editor.click({ position: { x: 120, y: 24 } })
-  await input.focus()
+  await focusEditorInput(page, options)
   await page.keyboard.press('ControlOrMeta+A')
   await page.keyboard.press('Backspace')
   await page.keyboard.insertText(content)
@@ -662,6 +668,86 @@ test('handles a remote conflict in Monaco diff mode without creating an automati
   await expect.poll(async () => await readOpfsFile(page, path)).toBe(mergedContent)
   await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(mergedContent)
   await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual([path])
+})
+
+test('keeps the diff editor cursor stable across a responsive layout change', async ({ page, request }) => {
+  await page.setViewportSize({ width: 1200, height: 900 })
+
+  const { path, userId } = await setupRemoteConflict(page, request)
+  const initialResolvedContent = '# Local draft\nLine before\nAlpha Beta Gamma\n'
+  const finalResolvedContent = '# Local draft\nLine before\nAlpha [first][second]Beta Gamma\n'
+
+  await page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) }).click()
+  await page.getByRole('button', { name: 'Resolve conflicting changes' }).click()
+
+  await expect(page.locator('.monaco-diff-editor')).toBeVisible()
+  await replaceEditorContent(page, initialResolvedContent, { diff: true })
+  await focusEditorInput(page, { diff: true })
+  await page.keyboard.press('ControlOrMeta+Home')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+
+  for (let step = 0; step < 'Alpha '.length; step += 1) {
+    await page.keyboard.press('ArrowRight')
+  }
+
+  await page.keyboard.insertText('[first]')
+  await page.setViewportSize({ width: 780, height: 900 })
+  await expect(page.locator('.monaco-diff-inline-legend')).toBeVisible()
+  await page.keyboard.insertText('[second]')
+
+  await expect(page.locator('.monaco-diff-editor .editor.modified .view-lines').last()).toContainText('Alpha [first][second]Beta Gamma')
+  await page.getByRole('button', { name: 'Save resolved version' }).click()
+
+  await expect(page.locator('.monaco-diff-editor')).toHaveCount(0)
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(finalResolvedContent)
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(finalResolvedContent)
+  await expect(page.locator('.monaco-editor .view-lines').last()).toContainText('Alpha [first][second]Beta Gamma')
+})
+
+test('keeps the diff editor selection stable across a responsive layout change', async ({ page, request }) => {
+  await page.setViewportSize({ width: 780, height: 900 })
+
+  const { path, userId } = await setupRemoteConflict(page, request)
+  const initialResolvedContent = '# Local draft\nLine before\nAlpha Beta Gamma\n'
+  const finalResolvedContent = '# Local draft\nLine before\nAlpha replaced Beta Gamma\n'
+  const selectedToken = 'selected '
+  const replacementToken = 'replaced '
+
+  await page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) }).click()
+  await page.getByRole('button', { name: 'Resolve conflicting changes' }).click()
+
+  await expect(page.locator('.monaco-diff-editor')).toBeVisible()
+  await expect(page.locator('.monaco-diff-inline-legend')).toBeVisible()
+  await replaceEditorContent(page, initialResolvedContent, { diff: true })
+  await focusEditorInput(page, { diff: true })
+  await page.keyboard.press('ControlOrMeta+Home')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+
+  for (let step = 0; step < 'Alpha '.length; step += 1) {
+    await page.keyboard.press('ArrowRight')
+  }
+
+  await page.keyboard.insertText(selectedToken)
+  await page.keyboard.down('Shift')
+
+  for (let step = 0; step < selectedToken.length; step += 1) {
+    await page.keyboard.press('ArrowLeft')
+  }
+
+  await page.keyboard.up('Shift')
+  await page.setViewportSize({ width: 1500, height: 900 })
+  await expect(page.locator('.monaco-diff-pane-label.monaco-diff-label-hidden')).toHaveCount(0)
+  await page.keyboard.insertText(replacementToken)
+
+  await expect(page.locator('.monaco-diff-editor .editor.modified .view-lines').last()).toContainText('Alpha replaced Beta Gamma')
+  await page.getByRole('button', { name: 'Save resolved version' }).click()
+
+  await expect(page.locator('.monaco-diff-editor')).toHaveCount(0)
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(finalResolvedContent)
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(finalResolvedContent)
+  await expect(page.locator('.monaco-editor .view-lines').last()).toContainText('Alpha replaced Beta Gamma')
 })
 
 test('accepts the cloud version for a remote conflict', async ({ page, request }) => {

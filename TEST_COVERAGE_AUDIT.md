@@ -126,7 +126,7 @@ Current test stack:
 | Rename validation, duplicate target, same-name no-op, open-path remap | yes | no | no | no | well covered in `test/notes.test.ts` |
 | Server sync should not auto-create a conflict file | yes | no | no | no | covered in `test/sync.test.ts` |
 | Sync overlap/racing | yes | no | no | no | covered in `test/sync.test.ts` |
-| Cursor jumps to top while typing during sync | no | no | no | yes | cursor/selection stability needs a real editor |
+| Cursor jumps to top while typing during sync | yes | no | no | no | covered in `test/sync.browser.test.ts` for plain-editor cursor/column/selection stability across autosave, manual save, and lifecycle sync, plus `test/conflicts.browser.test.ts` for diff-editor cursor/selection stability across responsive layout changes |
 | False cloud conflict / empty diff when local already matched remote | yes | no | no | no | covered in `test/sync.test.ts` |
 | Conflict persistence and back-to-back conflict state handling | yes | no | no | no | covered in `test/conflicts.browser.test.ts` including queued conflicts and re-entry |
 | Clicking the status-bar conflict, leaving diff mode, and returning to normal editor after resolution | yes | no | no | no | covered in `test/conflicts.browser.test.ts` |
