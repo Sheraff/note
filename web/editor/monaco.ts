@@ -67,7 +67,6 @@ export function createMonacoEditor(
   options: {
     initialValue: string
     onChange(value: string): void
-    onSave(): void
   },
 ): MonacoController {
   let isApplyingValue = false
@@ -83,10 +82,6 @@ export function createMonacoEditor(
   void ensureMonaspaceFont().then(() => {
     monaco.editor.remeasureFonts()
     editor.layout()
-  })
-
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-    options.onSave()
   })
 
   editor.onDidChangeModelContent(() => {
@@ -127,7 +122,6 @@ export function createMonacoDiffEditor(
     originalLabel: string
     modifiedLabel: string
     onChange(value: string): void
-    onSave(): void
   },
 ): MonacoController {
   let isApplyingValue = false
@@ -158,10 +152,6 @@ export function createMonacoDiffEditor(
   void ensureMonaspaceFont().then(() => {
     monaco.editor.remeasureFonts()
     editor.layout()
-  })
-
-  modifiedEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-    options.onSave()
   })
 
   modifiedModel.onDidChangeContent(() => {

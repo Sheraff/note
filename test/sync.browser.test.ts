@@ -1110,6 +1110,53 @@ test('syncs exactly once when saving with the keyboard shortcut', async ({ page,
   await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe(updatedContent)
 })
 
+test('syncs exactly once when saving with the global keyboard shortcut outside Monaco', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-global-save-${runId}`
+  const noteName = `global-save-${runId}`
+  const notePath = `${noteName}.md`
+  const updatedContent = '# Saved from the global shortcut\n'
+
+  await installTestUserHeader(page, userId)
+  await page.goto('/')
+  await expect(page).toHaveTitle('Note')
+  await waitForSyncIdle(page)
+
+  await createNoteFromSidebar(page, noteName)
+  await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe('# Untitled\n')
+
+  const syncRequests = await countSyncRequestsDuring(page, async () => {
+    await replaceEditorContent(page, updatedContent)
+    await page.getByRole('button', { name: /^Sync/ }).focus()
+    await page.keyboard.press('ControlOrMeta+S')
+  })
+
+  expect(syncRequests).toEqual({ manifest: 0, push: 1 })
+  await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe(updatedContent)
+})
+
+test('syncs exactly once when using the manual sync keyboard shortcut', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-manual-hotkey-${runId}`
+  const noteName = `manual-hotkey-${runId}`
+  const notePath = `${noteName}.md`
+
+  await installTestUserHeader(page, userId)
+  await page.goto('/')
+  await expect(page).toHaveTitle('Note')
+  await waitForSyncIdle(page)
+
+  await createNoteFromSidebar(page, noteName)
+
+  const syncRequests = await countSyncRequestsDuring(page, async () => {
+    await page.getByRole('button', { name: /^Sync/ }).focus()
+    await page.keyboard.press('ControlOrMeta+Shift+S')
+  })
+
+  expect(syncRequests).toEqual({ manifest: 0, push: 1 })
+  await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe('# Untitled\n')
+})
+
 test('does not sync when a pending autosave hits a local file conflict', async ({ page, request }) => {
   const runId = randomUUID()
   const userId = `sync-conflict-${runId}`

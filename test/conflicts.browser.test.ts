@@ -670,6 +670,25 @@ test('handles a remote conflict in Monaco diff mode without creating an automati
   await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual([path])
 })
 
+test('saves the resolved version with the global keyboard shortcut in diff mode', async ({ page, request }) => {
+  const { path, userId } = await setupRemoteConflict(page, request)
+  const mergedContent = '# Resolved from keyboard shortcut\n'
+
+  await page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) }).click()
+  await page.getByRole('button', { name: 'Resolve conflicting changes' }).click()
+
+  await expect(page.locator('.monaco-diff-editor')).toBeVisible()
+
+  await replaceEditorContent(page, mergedContent, { diff: true })
+  await focusEditorInput(page, { diff: true })
+  await page.keyboard.press('ControlOrMeta+S')
+
+  await expect(page.locator('.monaco-diff-editor')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) })).toHaveCount(0)
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(mergedContent)
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(mergedContent)
+})
+
 test('keeps the diff editor cursor stable across a responsive layout change', async ({ page, request }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
 

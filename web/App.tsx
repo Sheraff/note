@@ -1,3 +1,4 @@
+import { createMultiHotkeyHandler } from '@tanstack/hotkeys'
 import { createMemo, createSignal, onCleanup, onMount, type JSX } from 'solid-js'
 import { EditorPane } from './app/EditorPane.tsx'
 import type { EntryEditorSubmitSource } from './app/FileTree.tsx'
@@ -308,9 +309,6 @@ function App() {
           setDraftContent(value)
           syncConflictDraft(value)
         },
-        onSave() {
-          void handleSaveResolvedVersion().catch(reportError)
-        },
       })
       editorMode = 'diff'
       return
@@ -325,9 +323,6 @@ function App() {
         if (noteConflict()?.path !== currentPath()) {
           scheduleSave()
         }
-      },
-      onSave() {
-        void saveAndSyncCurrentNote().catch(reportError)
       },
     })
     editorMode = 'plain'
@@ -803,6 +798,37 @@ function App() {
 
   function handleSync() {
     void requestSync({ mode: 'full' }).catch(reportError)
+  }
+
+  if (typeof document !== 'undefined') {
+    const handleDocumentHotkeys = createMultiHotkeyHandler(
+      {
+        'Mod+Shift+S': () => {
+          // Let the keydown finish before kicking off sync so browser-level Shift+Save handling does not swallow it.
+          window.setTimeout(() => {
+            handleSync()
+          }, 0)
+        },
+        'Mod+S': () => {
+          if (isDiffMode()) {
+            void handleSaveResolvedVersion().catch(reportError)
+            return
+          }
+
+          void saveAndSyncCurrentNote().catch(reportError)
+        },
+      },
+      {
+        preventDefault: true,
+        stopPropagation: true,
+      },
+    )
+
+    document.addEventListener('keydown', handleDocumentHotkeys, true)
+
+    onCleanup(() => {
+      document.removeEventListener('keydown', handleDocumentHotkeys, true)
+    })
   }
 
   function triggerAutoSync() {
