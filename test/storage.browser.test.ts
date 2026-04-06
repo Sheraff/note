@@ -17,6 +17,26 @@ type SeededNotePaths = {
 const TEST_CONFIG_KEY = '__note_storage_browser_test_config__'
 const TEST_USER_HEADER = 'X-Note-User'
 
+async function installTestUserHeader(page: Page, userId: string): Promise<void> {
+  await page.context().addInitScript(
+    ({ headerName, headerValue }) => {
+      const originalFetch = window.fetch.bind(window)
+
+      window.fetch = async (input, init) => {
+        const headers = new Headers(init?.headers)
+
+        headers.set(headerName, headerValue)
+
+        return originalFetch(input, {
+          ...init,
+          headers,
+        })
+      }
+    },
+    { headerName: TEST_USER_HEADER, headerValue: userId },
+  )
+}
+
 async function createIsolatedStoragePage(browser: Browser, userId: string): Promise<Page> {
   const context = await browser.newContext({
     baseURL: test.info().project.use.baseURL ?? 'http://127.0.0.1:4173',
@@ -458,6 +478,46 @@ async function createNoteFromSidebar(page: Page, name: string): Promise<string> 
   return notePath
 }
 
+async function enterRenameModeFromFocusedOpenFile(page: Page, fileName: string): Promise<void> {
+  const noteButton = page.getByRole('button', { name: fileName, exact: true })
+
+  await noteButton.click()
+  await expect(noteButton).toHaveAttribute('aria-current', 'true')
+  await noteButton.focus()
+  await noteButton.click()
+}
+
+test('opens and dismisses the storage popover from the status bar button', async ({ page }) => {
+  const runId = randomUUID()
+
+  await installStorageHarness(page, {
+    appOpfsRootName: `app-opfs-${runId}`,
+    pickedFolderName: `picked-${runId}`,
+    queryPermission: 'prompt',
+    requestPermission: 'granted',
+  })
+  await installTestUserHeader(page, `storage-page-${runId}`)
+
+  await page.goto('/')
+  await expect(page).toHaveTitle('Note')
+  await waitForSyncIdle(page)
+
+  const storageButton = page.locator('.statusbar-storage').getByRole('button', { name: 'OPFS', exact: true })
+  const storagePopover = page.locator('.statusbar-storage-popover')
+
+  await expect(storagePopover).toBeHidden()
+
+  await storageButton.click()
+
+  await expect(storagePopover).toBeVisible()
+  await expect(storagePopover.getByRole('button', { name: 'Attach folder' })).toBeVisible()
+  await expect(storagePopover.getByRole('button', { name: 'Use OPFS' })).toBeVisible()
+
+  await page.keyboard.press('Escape')
+
+  await expect(storagePopover).toBeHidden()
+})
+
 test('creates and saves a note in an attached folder, then restores it after reopening', async ({ page }) => {
   const runId = randomUUID()
   const noteName = `created-${runId}`
@@ -470,6 +530,7 @@ test('creates and saves a note in an attached folder, then restores it after reo
     queryPermission: 'prompt',
     requestPermission: 'granted',
   })
+  await installTestUserHeader(page, `storage-page-${runId}`)
 
   await attachPickedFolder(page)
 
@@ -507,6 +568,7 @@ test('keeps the current OPFS workspace active when attach folder permission is d
     queryPermission: 'prompt',
     requestPermission: 'denied',
   })
+  await installTestUserHeader(page, `storage-page-${runId}`)
 
   await page.goto('/')
   await expect(page).toHaveTitle('Note')
@@ -541,6 +603,7 @@ test('keeps the current OPFS workspace active when attach folder is cancelled', 
     queryPermission: 'prompt',
     requestPermission: 'granted',
   })
+  await installTestUserHeader(page, `storage-page-${runId}`)
 
   await page.goto('/')
   await expect(page).toHaveTitle('Note')
@@ -577,6 +640,7 @@ test('switches from an attached folder back to OPFS and keeps OPFS after reopeni
     queryPermission: 'prompt',
     requestPermission: 'granted',
   })
+  await installTestUserHeader(page, `storage-page-${runId}`)
 
   await attachPickedFolder(page, [
     { path: directoryNotePath, content: '# Directory note\n' },
@@ -662,6 +726,141 @@ test('deletes the open note from an attached folder and falls back to the remain
     await expect(page.getByRole('button', { name: `remove-${runId}.md`, exact: true })).toHaveCount(0)
     await expect(remainingNoteButton).toHaveAttribute('aria-current', 'true')
     await expectEditorToContain(page, '# Keep me')
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('reveals file and folder tree actions on hover', async ({ browser }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const folderPath = `hover-${runId}`
+  const fileName = `show-actions-${runId}.md`
+  const filePath = `${folderPath}/${fileName}`
+  const page = await createIsolatedStoragePage(browser, `storage-hover-${runId}`)
+
+  try {
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [{ path: filePath, content: '# Hover me\n' }])
+
+    const folderRow = page.locator('.tree-row', {
+      has: page.getByRole('button', { name: folderPath, exact: true }),
+    })
+    const fileRow = page.locator('.tree-row', {
+      has: page.getByRole('button', { name: fileName, exact: true }),
+    })
+    const folderActions = folderRow.locator('.tree-actions')
+    const fileActions = fileRow.locator('.tree-actions')
+
+    await expect(folderActions).toBeHidden()
+    await expect(fileActions).toBeHidden()
+
+    await folderRow.hover()
+    await expect(folderActions).toBeVisible()
+
+    await fileRow.hover()
+    await expect(fileActions).toBeVisible()
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('enters file rename mode on a second click of the focused open file', async ({ browser }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const notePath = `second-click-${runId}/rename-me-${runId}.md`
+  const fileName = `rename-me-${runId}.md`
+  const page = await createIsolatedStoragePage(browser, `storage-second-click-${runId}`)
+
+  try {
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [{ path: notePath, content: '# Rename me\n' }])
+
+    await expectEditorToContain(page, '# Rename me')
+    await enterRenameModeFromFocusedOpenFile(page, fileName)
+
+    await expect(page.locator('.tree-row-editor input')).toHaveValue(fileName)
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('selects only the basename when file rename mode opens', async ({ browser }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const fileName = `rename-selection-${runId}.md`
+  const notePath = `selection-${runId}/${fileName}`
+  const basenameEnd = fileName.lastIndexOf('.')
+  const page = await createIsolatedStoragePage(browser, `storage-rename-selection-${runId}`)
+
+  try {
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [{ path: notePath, content: '# Rename me\n' }])
+
+    await expectEditorToContain(page, '# Rename me')
+    await enterRenameModeFromFocusedOpenFile(page, fileName)
+
+    const renameInput = page.locator('.tree-row-editor input')
+
+    await expect(renameInput).toHaveValue(fileName)
+    await expect(renameInput).toBeFocused()
+    await expect.poll(async () => await renameInput.evaluate((element) => {
+      const input = element as HTMLInputElement
+
+      return {
+        end: input.selectionEnd,
+        start: input.selectionStart,
+      }
+    })).toEqual({ start: 0, end: basenameEnd })
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('keeps the rename input focused across repeated clicks once file rename mode is open', async ({ browser }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const fileName = `rename-focus-${runId}.md`
+  const notePath = `rename-focus-${runId}/${fileName}`
+  const page = await createIsolatedStoragePage(browser, `storage-rename-focus-${runId}`)
+
+  try {
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [{ path: notePath, content: '# Rename me\n' }])
+
+    await expectEditorToContain(page, '# Rename me')
+    await enterRenameModeFromFocusedOpenFile(page, fileName)
+
+    const renameInput = page.locator('.tree-row-editor input')
+
+    await expect(renameInput).toBeFocused()
+    await renameInput.click()
+    await expect(renameInput).toBeFocused()
+    await expect(renameInput).toHaveValue(fileName)
   } finally {
     await page.context().close()
   }
@@ -847,6 +1046,7 @@ test('attaches a folder and restores the last opened note after reopening the ap
     queryPermission: 'prompt',
     requestPermission: 'granted',
   })
+  await installTestUserHeader(page, `storage-page-${runId}`)
 
   await attachPickedFolderAndOpenLastNote(page, paths)
 
@@ -875,6 +1075,7 @@ test('shows reconnect state on startup when the saved folder permission is pendi
     queryPermission: 'prompt',
     requestPermission: 'granted',
   })
+  await installTestUserHeader(page, `storage-page-${runId}`)
 
   await attachPickedFolderAndOpenLastNote(page, paths)
 
@@ -905,6 +1106,7 @@ test('reconnects the saved folder and restores the last opened note without anot
     queryPermission: 'prompt',
     requestPermission: 'granted',
   })
+  await installTestUserHeader(page, `storage-page-${runId}`)
 
   await attachPickedFolderAndOpenLastNote(page, paths)
 
@@ -935,6 +1137,7 @@ test('keeps reconnect available and shows an error when folder access is denied'
     queryPermission: 'prompt',
     requestPermission: 'granted',
   })
+  await installTestUserHeader(page, `storage-page-${runId}`)
 
   await attachPickedFolderAndOpenLastNote(page, paths)
 

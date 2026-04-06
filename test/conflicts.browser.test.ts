@@ -12,6 +12,26 @@ type SyncSnapshotResponse = {
 
 const TEST_USER_HEADER = 'X-Note-User'
 
+async function installTestUserHeader(page: Page, userId: string): Promise<void> {
+  await page.addInitScript(
+    ({ headerName, headerValue }) => {
+      const originalFetch = window.fetch.bind(window)
+
+      window.fetch = async (input, init) => {
+        const headers = new Headers(init?.headers)
+
+        headers.set(headerName, headerValue)
+
+        return originalFetch(input, {
+          ...init,
+          headers,
+        })
+      }
+    },
+    { headerName: TEST_USER_HEADER, headerValue: userId },
+  )
+}
+
 function withTestUser(userId?: string): { headers?: Record<string, string> } {
   if (userId === undefined) {
     return {}
@@ -288,6 +308,7 @@ type RemoteConflictScenario = {
   baseContent: string
   remoteContent: string
   localContent: string
+  userId: string
 }
 
 type RemoteDeletionConflictScenario = {
@@ -318,9 +339,11 @@ type MultipleRemoteConflictScenario = {
     remoteContent: string
   }>
   folder: string
+  userId: string
 }
 
 async function setupRemoteConflict(page: Page, request: APIRequestContext, userId?: string): Promise<RemoteConflictScenario> {
+  const effectiveUserId = userId ?? `browser-${randomUUID()}`
   const runId = randomUUID()
   const folder = `e2e/${runId}`
   const fileName = `conflict-${runId}.md`
@@ -329,20 +352,21 @@ async function setupRemoteConflict(page: Page, request: APIRequestContext, userI
   const remoteContent = '# Cloud version\n'
   const localContent = '# Local draft\n'
 
+  await installTestUserHeader(page, effectiveUserId)
   await page.goto('/')
   await expect(page).toHaveTitle('Note')
   await waitForSyncIdle(page)
 
   await writeOpfsFile(page, path, baseContent)
-  await createRemoteFileOnServer(request, path, baseContent, userId)
+  await createRemoteFileOnServer(request, path, baseContent, effectiveUserId)
   await expect.poll(async () => await readOpfsFile(page, path)).toBe(baseContent)
-  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(baseContent)
+  await expect.poll(async () => (await getRemoteFile(request, path, effectiveUserId))?.content ?? null).toBe(baseContent)
   await reloadAndWaitForSync(page)
   await expect(page).toHaveTitle('Note')
   await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual([path])
 
-  await pushRemoteFile(request, path, remoteContent, userId)
-  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(remoteContent)
+  await pushRemoteFile(request, path, remoteContent, effectiveUserId)
+  await expect.poll(async () => (await getRemoteFile(request, path, effectiveUserId))?.content ?? null).toBe(remoteContent)
 
   await writeOpfsFile(page, path, localContent)
   await reloadAndWaitForSync(page)
@@ -363,6 +387,7 @@ async function setupRemoteConflict(page: Page, request: APIRequestContext, userI
     baseContent,
     remoteContent,
     localContent,
+    userId: effectiveUserId,
   }
 }
 
@@ -474,7 +499,8 @@ async function setupRemoteConflictWithSibling(page: Page, request: APIRequestCon
   }
 }
 
-async function setupMultipleRemoteConflicts(page: Page, request: APIRequestContext): Promise<MultipleRemoteConflictScenario> {
+async function setupMultipleRemoteConflicts(page: Page, request: APIRequestContext, userId?: string): Promise<MultipleRemoteConflictScenario> {
+  const effectiveUserId = userId ?? `browser-${randomUUID()}`
   const runId = randomUUID()
   const folder = `e2e/${runId}`
   const files = [
@@ -492,6 +518,7 @@ async function setupMultipleRemoteConflicts(page: Page, request: APIRequestConte
     },
   ]
 
+  await installTestUserHeader(page, effectiveUserId)
   await page.goto('/')
   await expect(page).toHaveTitle('Note')
   await waitForSyncIdle(page)
@@ -500,9 +527,9 @@ async function setupMultipleRemoteConflicts(page: Page, request: APIRequestConte
     const baseContent = `# Base ${index + 1}\n`
 
     await writeOpfsFile(page, file.path, baseContent)
-    await createRemoteFileOnServer(request, file.path, baseContent)
+    await createRemoteFileOnServer(request, file.path, baseContent, effectiveUserId)
     await expect.poll(async () => await readOpfsFile(page, file.path)).toBe(baseContent)
-    await expect.poll(async () => (await getRemoteFile(request, file.path))?.content ?? null).toBe(baseContent)
+    await expect.poll(async () => (await getRemoteFile(request, file.path, effectiveUserId))?.content ?? null).toBe(baseContent)
   }
 
   await page.reload()
@@ -511,8 +538,8 @@ async function setupMultipleRemoteConflicts(page: Page, request: APIRequestConte
   await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual(files.map((file) => file.path).sort())
 
   for (const file of files) {
-    await pushRemoteFile(request, file.path, file.remoteContent)
-    await expect.poll(async () => (await getRemoteFile(request, file.path))?.content ?? null).toBe(file.remoteContent)
+    await pushRemoteFile(request, file.path, file.remoteContent, effectiveUserId)
+    await expect.poll(async () => (await getRemoteFile(request, file.path, effectiveUserId))?.content ?? null).toBe(file.remoteContent)
     await writeOpfsFile(page, file.path, file.localContent)
     await expect.poll(async () => await readOpfsFile(page, file.path)).toBe(file.localContent)
   }
@@ -533,6 +560,7 @@ async function setupMultipleRemoteConflicts(page: Page, request: APIRequestConte
     conflictPaths: syncResponse.conflicts.map((conflict) => conflict.path),
     files,
     folder,
+    userId: effectiveUserId,
   }
 }
 
@@ -549,7 +577,7 @@ function getConflictCopyPath(paths: string[], originalPath: string): string {
 test('handles a remote conflict in Monaco diff mode without creating an automatic conflict copy', async ({ page, request }) => {
   test.slow()
 
-  const { folder, fileName, path } = await setupRemoteConflict(page, request)
+  const { folder, fileName, path, userId } = await setupRemoteConflict(page, request)
   const mergedContent = '# Merged resolution\n'
 
   const conflictButton = page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) })
@@ -573,12 +601,12 @@ test('handles a remote conflict in Monaco diff mode without creating an automati
   await expect(page.getByRole('button', { name: /Cloud conflict:/ })).toHaveCount(0)
   await expect(page.getByRole('button', { name: fileName, exact: true })).not.toHaveClass(/tree-entry-conflict/)
   await expect.poll(async () => await readOpfsFile(page, path)).toBe(mergedContent)
-  await expect.poll(async () => (await getRemoteFile(request, path))?.content ?? null).toBe(mergedContent)
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(mergedContent)
   await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual([path])
 })
 
 test('accepts the cloud version for a remote conflict', async ({ page, request }) => {
-  const { folder, path, remoteContent } = await setupRemoteConflict(page, request)
+  const { folder, path, remoteContent, userId } = await setupRemoteConflict(page, request)
 
   const conflictButton = page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) })
 
@@ -588,7 +616,7 @@ test('accepts the cloud version for a remote conflict', async ({ page, request }
   await expect(page.getByRole('button', { name: /Cloud conflict:/ })).toHaveCount(0)
   await expect(page.locator('.monaco-diff-editor')).toHaveCount(0)
   await expect.poll(async () => await readOpfsFile(page, path)).toBe(remoteContent)
-  await expect.poll(async () => (await getRemoteFile(request, path))?.content ?? null).toBe(remoteContent)
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(remoteContent)
   await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual([path])
   await expect(page.locator('.monaco-editor .view-lines').last()).toContainText('# Cloud version')
 })
@@ -724,7 +752,7 @@ test('reopens an unresolved conflict in diff mode after switching notes and then
 })
 
 test('keeps later conflicts unresolved when multiple cloud conflicts arrive in one sync', async ({ page, request }) => {
-  const { conflictPaths, files, folder } = await setupMultipleRemoteConflicts(page, request)
+  const { conflictPaths, files, folder, userId } = await setupMultipleRemoteConflicts(page, request)
   const initialConflictButton = page.getByRole('button', { name: /Cloud conflict:/ })
   const firstConflict = files.find((file) => file.path === conflictPaths[0])
   const secondConflict = files.find((file) => file.path === conflictPaths[1])
@@ -735,8 +763,8 @@ test('keeps later conflicts unresolved when multiple cloud conflicts arrive in o
   await initialConflictButton.click()
   await page.getByRole('button', { name: 'Save my current draft', exact: true }).click()
 
-  await expect.poll(async () => (await getRemoteFile(request, firstConflict!.path))?.content ?? null).toBe(firstConflict!.localContent)
-  await expect.poll(async () => (await getRemoteFile(request, secondConflict!.path))?.content ?? null).toBe(secondConflict!.remoteContent)
+  await expect.poll(async () => (await getRemoteFile(request, firstConflict!.path, userId))?.content ?? null).toBe(firstConflict!.localContent)
+  await expect.poll(async () => (await getRemoteFile(request, secondConflict!.path, userId))?.content ?? null).toBe(secondConflict!.remoteContent)
   await expect.poll(async () => await readOpfsFile(page, secondConflict!.path)).toBe(secondConflict!.localContent)
 
   const secondConflictButton = page.getByRole('button', {
@@ -751,8 +779,37 @@ test('keeps later conflicts unresolved when multiple cloud conflicts arrive in o
   await page.getByRole('button', { name: 'Save my current draft', exact: true }).click()
 
   await expect(page.getByRole('button', { name: /Cloud conflict:/ })).toHaveCount(0)
-  await expect.poll(async () => (await getRemoteFile(request, secondConflict!.path))?.content ?? null).toBe(secondConflict!.localContent)
+  await expect.poll(async () => (await getRemoteFile(request, secondConflict!.path, userId))?.content ?? null).toBe(secondConflict!.localContent)
   await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual(files.map((file) => file.path).sort())
+})
+
+test('opens and dismisses the status bar and tree conflict popovers', async ({ browser, request }) => {
+  const userId = `browser-${randomUUID()}`
+  const page = await createIsolatedBrowserPage(browser, userId)
+
+  try {
+    const { fileName, path } = await setupRemoteConflict(page, request, userId)
+    const statusbarConflictButton = page.getByRole('button', {
+      name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`),
+    })
+    const statusbarPopover = page.locator('.statusbar-conflict-popover')
+    const treeConflictButton = page.getByRole('button', { name: fileName, exact: true })
+    const treePopover = page.locator(`[id="tree-conflict-${path.replaceAll('/', '--')}"]`)
+
+    await expect(statusbarPopover).toBeHidden()
+    await statusbarConflictButton.click()
+    await expect(statusbarPopover).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(statusbarPopover).toBeHidden()
+
+    await expect(treePopover).toBeHidden()
+    await treeConflictButton.click()
+    await expect(treePopover).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(treePopover).toBeHidden()
+  } finally {
+    await page.context().close()
+  }
 })
 
 test('opens and resolves a cloud conflict from the tree popover', async ({ browser, request }) => {
@@ -834,7 +891,7 @@ test('keeps diff labels and actions usable on a narrow viewport', async ({ page,
 })
 
 test('ignores focus, visibility, and online auto-sync triggers while a conflict is unresolved', async ({ page, request }) => {
-  const { localContent, path, remoteContent } = await setupRemoteConflict(page, request)
+  const { localContent, path, remoteContent, userId } = await setupRemoteConflict(page, request)
   const updatedDraft = `${localContent}Still unresolved after lifecycle events\n`
 
   await replaceEditorContent(page, updatedDraft)
@@ -851,5 +908,5 @@ test('ignores focus, visibility, and online auto-sync triggers while a conflict 
   await expect(page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) })).toBeVisible()
   await expect(page.locator('.monaco-editor .view-lines').last()).toContainText('Still unresolved after lifecycle events')
   await expect.poll(async () => await readOpfsFile(page, path)).toBe(localContent)
-  await expect.poll(async () => (await getRemoteFile(request, path))?.content ?? null).toBe(remoteContent)
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(remoteContent)
 })

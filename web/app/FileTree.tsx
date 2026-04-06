@@ -29,6 +29,7 @@ function EntryEditorRow(props: {
   onSubmit(name: string): Promise<string | null>
 }) {
   let inputElement: HTMLInputElement | undefined
+  let allowBlurHandling = false
 
   const [value, setValue] = createSignal(props.initialValue)
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
@@ -48,7 +49,13 @@ function EntryEditorRow(props: {
   }
 
   onMount(() => {
-    focusInput(props.initialSelection)
+    window.requestAnimationFrame(() => {
+      focusInput(props.initialSelection)
+
+      window.requestAnimationFrame(() => {
+        allowBlurHandling = true
+      })
+    })
   })
 
   async function submit() {
@@ -92,6 +99,13 @@ function EntryEditorRow(props: {
           aria-invalid={errorMessage() !== null ? 'true' : 'false'}
           onBlur={() => {
             if (isSubmitting()) {
+              return
+            }
+
+            if (!allowBlurHandling) {
+              window.requestAnimationFrame(() => {
+                focusInput(props.initialSelection)
+              })
               return
             }
 
@@ -168,7 +182,15 @@ function FileNodeRow(props: {
 }) {
   const hasConflict = () => props.conflict?.path === props.node.path
   const popoverId = `tree-conflict-${props.node.path.replaceAll('/', '--')}`
+  let hadFocus = false
+  let renameArmed = false
   let wasFocusedOnMouseDown = false
+
+  createEffect(() => {
+    if (props.currentPath !== props.node.path) {
+      renameArmed = false
+    }
+  })
 
   return (
     <div class="tree-row">
@@ -177,19 +199,40 @@ function FileNodeRow(props: {
         aria-current={props.currentPath === props.node.path ? 'true' : undefined}
         popovertarget={hasConflict() ? popoverId : undefined}
         type="button"
-        onMouseDown={(event) => {
-          wasFocusedOnMouseDown = document.activeElement === event.currentTarget
+        onFocus={() => {
+          hadFocus = true
+
+          if (props.currentPath === props.node.path) {
+            queueMicrotask(() => {
+              if (props.currentPath === props.node.path) {
+                renameArmed = true
+              }
+            })
+          }
         }}
-        onClick={() => {
+        onBlur={() => {
+          hadFocus = false
+        }}
+        onMouseDown={(event) => {
+          wasFocusedOnMouseDown = hadFocus || renameArmed
+
+          if ((hadFocus || renameArmed) && props.currentPath === props.node.path) {
+            event.preventDefault()
+          }
+        }}
+        onClick={(event) => {
           if (hasConflict()) {
             props.onOpenConflict(props.node.path)
             return
           }
 
-          if (wasFocusedOnMouseDown && props.currentPath === props.node.path) {
+          if (props.currentPath === props.node.path && (renameArmed || wasFocusedOnMouseDown || event.detail > 1)) {
+            renameArmed = false
             props.onStartRename(props.node.path, props.node.kind, props.node.name)
             return
           }
+
+          renameArmed = false
 
           props.onOpen(props.node.path)
         }}
@@ -260,6 +303,7 @@ function DirectoryNode(props: {
   onSubmitRename(name: string): Promise<string | null>
 }) {
   const [isOpen, setIsOpen] = createSignal(true)
+  let hadFocus = false
   let wasFocusedOnMouseDown = false
 
   createEffect(() => {
@@ -279,11 +323,21 @@ function DirectoryNode(props: {
               class="tree-entry"
               type="button"
               aria-expanded={isOpen() ? 'true' : 'false'}
-              onMouseDown={(event) => {
-                wasFocusedOnMouseDown = document.activeElement === event.currentTarget
+              onFocus={() => {
+                hadFocus = true
               }}
-              onClick={() => {
-                if (wasFocusedOnMouseDown) {
+              onBlur={() => {
+                hadFocus = false
+              }}
+              onMouseDown={(event) => {
+                wasFocusedOnMouseDown = hadFocus
+
+                if (hadFocus) {
+                  event.preventDefault()
+                }
+              }}
+              onClick={(event) => {
+                if (wasFocusedOnMouseDown || event.detail > 1) {
                   props.onStartRename(props.node.path, props.node.kind, props.node.name)
                   return
                 }
