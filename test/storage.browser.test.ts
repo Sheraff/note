@@ -714,6 +714,35 @@ test('creates only the requested note in an empty folder when submitted by blur'
   await expect(page.getByRole('button', { name: 'untitled.md', exact: true })).toHaveCount(0)
 })
 
+test('selects only the basename when new note mode opens', async ({ page }) => {
+  const runId = randomUUID()
+  const basenameEnd = 'untitled.md'.lastIndexOf('.')
+
+  await installStorageHarness(page, {
+    appOpfsRootName: `app-opfs-${runId}`,
+    pickedFolderName: `picked-${runId}`,
+    queryPermission: 'prompt',
+    requestPermission: 'granted',
+  })
+  await installTestUserHeader(page, `storage-create-selection-${runId}`)
+
+  await attachPickedFolder(page)
+  await page.getByRole('button', { name: 'New note', exact: true }).click()
+
+  const input = page.locator('.tree-row-editor input')
+
+  await expect(input).toHaveValue('untitled.md')
+  await expect(input).toBeFocused()
+  await expect.poll(async () => await input.evaluate((element) => {
+    const input = element as HTMLInputElement
+
+    return {
+      end: input.selectionEnd,
+      start: input.selectionStart,
+    }
+  })).toEqual({ start: 0, end: basenameEnd })
+})
+
 test('reloads the open attached-folder note after an external file edit on focus when the draft is unchanged', async ({ browser }) => {
   const runId = randomUUID()
   const userId = `storage-external-reload-${runId}`

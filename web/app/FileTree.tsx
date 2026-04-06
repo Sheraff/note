@@ -150,7 +150,7 @@ function CreateRow(props: {
     <EntryEditorRow
       kind={props.kind}
       initialValue={props.kind === 'file' ? 'untitled.md' : 'untitled'}
-      initialSelection="all"
+      initialSelection={props.kind === 'file' ? 'basename' : 'all'}
       onCancel={props.onCancel}
       onSubmit={props.onSubmit}
     />
