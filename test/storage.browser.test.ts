@@ -4,7 +4,7 @@ import { expect, test, type Browser, type Page } from '@playwright/test'
 type FakeDirectoryConfig = {
   appOpfsRootName: string
   pickedFolderName: string
-  pickerBehavior?: 'handle' | 'abort'
+  pickerBehavior?: 'handle' | 'abort' | 'unsupported'
   queryPermission: PermissionState
   requestPermission: PermissionState
 }
@@ -34,7 +34,7 @@ async function installStorageHarness(page: Page, initialConfig: FakeDirectoryCon
       type InitConfig = {
         appOpfsRootName: string
         pickedFolderName: string
-        pickerBehavior?: 'handle' | 'abort'
+        pickerBehavior?: 'handle' | 'abort' | 'unsupported'
         queryPermission: PermissionState
         requestPermission: PermissionState
       }
@@ -79,17 +79,24 @@ async function installStorageHarness(page: Page, initialConfig: FakeDirectoryCon
         },
       })
 
-      Object.defineProperty(window, 'showDirectoryPicker', {
-        configurable: true,
-        value: async () => {
-          if (readConfig().pickerBehavior === 'abort') {
-            throw new DOMException('The user aborted a request.', 'AbortError')
-          }
+      if (readConfig().pickerBehavior === 'unsupported') {
+        Object.defineProperty(window, 'showDirectoryPicker', {
+          configurable: true,
+          value: undefined,
+        })
+      } else {
+        Object.defineProperty(window, 'showDirectoryPicker', {
+          configurable: true,
+          value: async () => {
+            if (readConfig().pickerBehavior === 'abort') {
+              throw new DOMException('The user aborted a request.', 'AbortError')
+            }
 
-          const root = await originalGetDirectory()
-          return root.getDirectoryHandle(readConfig().pickedFolderName, { create: true })
-        },
-      })
+            const root = await originalGetDirectory()
+            return root.getDirectoryHandle(readConfig().pickedFolderName, { create: true })
+          },
+        })
+      }
 
       if ('FileSystemDirectoryHandle' in globalThis) {
         const directoryHandlePrototype = FileSystemDirectoryHandle.prototype as FileSystemDirectoryHandle & {
@@ -240,6 +247,106 @@ async function readOpfsFile(page: Page, path: string): Promise<string | null> {
       return null
     }
   }, path)
+}
+
+async function deletePickedFolderEntry(page: Page, path: string): Promise<void> {
+  await page.evaluate(async (targetPath) => {
+    const testApi = (globalThis as unknown as {
+      __noteStorageBrowserTest: {
+        getPickedDirectoryHandle(): Promise<FileSystemDirectoryHandle>
+      }
+    }).__noteStorageBrowserTest
+
+    const segments = targetPath.split('/').filter((part) => part.length > 0)
+    const name = segments.pop()
+
+    if (name === undefined) {
+      return
+    }
+
+    let directory = await testApi.getPickedDirectoryHandle()
+
+    for (const segment of segments) {
+      directory = await directory.getDirectoryHandle(segment)
+    }
+
+    await directory.removeEntry(name, { recursive: true })
+  }, path)
+}
+
+async function readStoredAppSettings(page: Page): Promise<{ backend: string; lastOpenedPath: string | null } | null> {
+  return page.evaluate(async () => {
+    const request = indexedDB.open('note-metadata', 1)
+
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error ?? new Error('Unable to open IndexedDB'))
+    })
+
+    try {
+      const transaction = database.transaction('settings', 'readonly')
+      const store = transaction.objectStore('settings')
+      const value = await new Promise<unknown>((resolve, reject) => {
+        const getRequest = store.get('app-settings')
+        getRequest.onsuccess = () => resolve(getRequest.result)
+        getRequest.onerror = () => reject(getRequest.error ?? new Error('Unable to read app settings'))
+      })
+
+      if (value === undefined || value === null || typeof value !== 'object') {
+        return null
+      }
+
+      const settings = value as { backend?: unknown; lastOpenedPath?: unknown }
+
+      return {
+        backend: typeof settings.backend === 'string' ? settings.backend : 'opfs',
+        lastOpenedPath: typeof settings.lastOpenedPath === 'string' ? settings.lastOpenedPath : null,
+      }
+    } finally {
+      database.close()
+    }
+  })
+}
+
+async function updateStoredAppSettings(
+  page: Page,
+  updates: Partial<{
+    backend: string
+    lastOpenedPath: string | null
+  }>,
+): Promise<void> {
+  await page.evaluate(async (nextUpdates) => {
+    const request = indexedDB.open('note-metadata', 1)
+
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error ?? new Error('Unable to open IndexedDB'))
+    })
+
+    try {
+      const transaction = database.transaction('settings', 'readwrite')
+      const store = transaction.objectStore('settings')
+      const currentValue = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        const getRequest = store.get('app-settings')
+        getRequest.onsuccess = () => resolve((getRequest.result as Record<string, unknown> | undefined) ?? {})
+        getRequest.onerror = () => reject(getRequest.error ?? new Error('Unable to read app settings'))
+      })
+
+      await new Promise<void>((resolve, reject) => {
+        const putRequest = store.put(
+          {
+            ...currentValue,
+            ...nextUpdates,
+          },
+          'app-settings',
+        )
+        putRequest.onsuccess = () => resolve()
+        putRequest.onerror = () => reject(putRequest.error ?? new Error('Unable to write app settings'))
+      })
+    } finally {
+      database.close()
+    }
+  }, updates)
 }
 
 async function waitForSyncIdle(page: Page): Promise<void> {
@@ -555,6 +662,175 @@ test('deletes the open note from an attached folder and falls back to the remain
     await expect(page.getByRole('button', { name: `remove-${runId}.md`, exact: true })).toHaveCount(0)
     await expect(remainingNoteButton).toHaveAttribute('aria-current', 'true')
     await expectEditorToContain(page, '# Keep me')
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('renames the open note in an attached folder and restores the renamed path after reopening', async ({ browser }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const originalNotePath = `rename-${runId}/before-${runId}.md`
+  const siblingNotePath = `rename-${runId}/sibling-${runId}.md`
+  const renamedNoteName = `after-${runId}.md`
+  const renamedNotePath = `rename-${runId}/${renamedNoteName}`
+  const page = await createIsolatedStoragePage(browser, `storage-rename-${runId}`)
+
+  try {
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [
+      { path: originalNotePath, content: '# Rename me\n' },
+      { path: siblingNotePath, content: '# Leave me alone\n' },
+    ])
+
+    const originalNoteButton = page.getByRole('button', { name: `before-${runId}.md`, exact: true })
+    const siblingNoteButton = page.getByRole('button', { name: `sibling-${runId}.md`, exact: true })
+
+    await page.locator('.monaco-editor').last().click({ position: { x: 120, y: 24 } })
+    await siblingNoteButton.click()
+    await expect(siblingNoteButton).toHaveAttribute('aria-current', 'true')
+    await expectEditorToContain(page, '# Leave me alone')
+
+    await originalNoteButton.click()
+    await expect(originalNoteButton).toHaveAttribute('aria-current', 'true')
+    await expectEditorToContain(page, '# Rename me')
+
+    await originalNoteButton.focus()
+    await page.getByRole('button', { name: `Rename ${originalNotePath}`, exact: true }).click()
+
+    const renameInput = page.locator('.tree-row-editor input')
+    await expect(renameInput).toHaveValue(`before-${runId}.md`)
+    await renameInput.fill(renamedNoteName)
+    await renameInput.press('Enter')
+    await waitForSyncIdle(page)
+
+    await expect.poll(async () => await readPickedFolderFile(page, originalNotePath)).toBe(null)
+    await expect.poll(async () => await readPickedFolderFile(page, renamedNotePath)).toBe('# Rename me\n')
+    await expect(page.getByRole('button', { name: `before-${runId}.md`, exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: renamedNoteName, exact: true })).toHaveAttribute('aria-current', 'true')
+    await expect(siblingNoteButton).toHaveCount(1)
+    await expectEditorToContain(page, '# Rename me')
+
+    const reopenedPage = await reopenAppWithHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'granted',
+      requestPermission: 'granted',
+    })
+
+    await waitForSyncIdle(reopenedPage)
+
+    await expect(reopenedPage.locator('.statusbar-storage').getByRole('button', { name: pickedFolderName, exact: true })).toBeVisible()
+    await expect(reopenedPage.getByRole('button', { name: `before-${runId}.md`, exact: true })).toHaveCount(0)
+    await expect(reopenedPage.getByRole('button', { name: renamedNoteName, exact: true })).toHaveAttribute('aria-current', 'true')
+    await expectEditorToContain(reopenedPage, '# Rename me')
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('falls back to the remaining note on startup when the saved path is missing', async ({ browser }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const remainingNotePath = `missing-${runId}/keep-${runId}.md`
+  const missingNotePath = `missing-${runId}/gone-${runId}.md`
+  const page = await createIsolatedStoragePage(browser, `storage-missing-${runId}`)
+
+  try {
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [
+      { path: remainingNotePath, content: '# Keep on startup\n' },
+      { path: missingNotePath, content: '# Open me first\n' },
+    ])
+
+    const missingNoteButton = page.getByRole('button', { name: `gone-${runId}.md`, exact: true })
+    const remainingNoteButton = page.getByRole('button', { name: `keep-${runId}.md`, exact: true })
+
+    await page.locator('.monaco-editor').last().click({ position: { x: 120, y: 24 } })
+    await remainingNoteButton.click()
+    await expect(remainingNoteButton).toHaveAttribute('aria-current', 'true')
+    await expectEditorToContain(page, '# Keep on startup')
+    await missingNoteButton.click()
+    await expect(missingNoteButton).toHaveAttribute('aria-current', 'true')
+    await expectEditorToContain(page, '# Open me first')
+    await expect.poll(async () => (await readStoredAppSettings(page))?.lastOpenedPath).toBe(missingNotePath)
+
+    await remainingNoteButton.click()
+    await expect(remainingNoteButton).toHaveAttribute('aria-current', 'true')
+    await expectEditorToContain(page, '# Keep on startup')
+    await updateStoredAppSettings(page, {
+      backend: 'directory',
+      lastOpenedPath: missingNotePath,
+    })
+    await expect.poll(async () => (await readStoredAppSettings(page))?.lastOpenedPath).toBe(missingNotePath)
+
+    await deletePickedFolderEntry(page, missingNotePath)
+    await expect.poll(async () => await readPickedFolderFile(page, remainingNotePath)).toBe('# Keep on startup\n')
+
+    const reopenedPage = await reopenAppWithHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'granted',
+      requestPermission: 'granted',
+    })
+
+    await waitForSyncIdle(reopenedPage)
+
+    await expect(reopenedPage.locator('.statusbar-storage').getByRole('button', { name: pickedFolderName, exact: true })).toBeVisible()
+    await expect(reopenedPage.getByRole('button', { name: `gone-${runId}.md`, exact: true })).toHaveCount(0)
+    await expect(reopenedPage.getByRole('button', { name: `keep-${runId}.md`, exact: true })).toHaveAttribute('aria-current', 'true')
+    await expectEditorToContain(reopenedPage, '# Keep on startup')
+    await expect.poll(async () => (await readStoredAppSettings(reopenedPage))?.lastOpenedPath).toBe(remainingNotePath)
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('shows the unsupported-browser attach error and keeps the OPFS workspace active', async ({ browser }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const page = await createIsolatedStoragePage(browser, `storage-unsupported-${runId}`)
+
+  try {
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      pickerBehavior: 'unsupported',
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await page.goto('/')
+    await expect(page).toHaveTitle('Note')
+    await waitForSyncIdle(page)
+
+    const notePath = await createNoteFromSidebar(page, `unsupported-${runId}`)
+
+    await waitForSyncIdle(page)
+    await expect(page.locator('.statusbar-storage').getByRole('button', { name: 'OPFS', exact: true })).toBeVisible()
+
+    await page.locator('.statusbar-storage').getByRole('button', { name: 'OPFS', exact: true }).click()
+    await page.locator('.statusbar-storage-popover').getByRole('button', { name: 'Attach folder' }).click()
+
+    await expect(page.locator('.statusbar-message')).toHaveText('This browser does not support the File System Access API.')
+    await expect(page.locator('.statusbar-storage').getByRole('button', { name: 'OPFS', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: notePath, exact: true })).toHaveAttribute('aria-current', 'true')
+    await expectEditorToContain(page, '# Untitled')
+    await expect(page.getByRole('button', { name: pickedFolderName, exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: `Reconnect ${pickedFolderName}`, exact: true })).toHaveCount(0)
+    await expect(page.locator('.editor-empty-panel')).toHaveCount(0)
   } finally {
     await page.context().close()
   }

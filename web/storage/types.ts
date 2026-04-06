@@ -23,5 +23,5 @@ export type NoteStorage = {
 }
 
 export function isDirectoryPickerSupported(): boolean {
-  return typeof window !== 'undefined' && 'showDirectoryPicker' in window
+  return typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function'
 }
