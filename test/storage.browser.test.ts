@@ -617,6 +617,85 @@ async function ensureFileIsOpen(page: Page, fileName: string): Promise<void> {
   await expect(noteButton).toHaveAttribute('aria-current', 'true')
 }
 
+async function getLocatorCenter(locator: ReturnType<Page['locator']>): Promise<{ x: number; y: number }> {
+  const box = await locator.boundingBox()
+
+  if (box === null) {
+    throw new Error('Expected a visible drag target')
+  }
+
+  return {
+    x: box.x + box.width / 2,
+    y: box.y + box.height / 2,
+  }
+}
+
+async function dragSidebarFileToFolder(
+  page: Page,
+  fileName: string,
+  folderPath: string,
+  hoverMs = 0,
+  targetArea: 'row' | 'content' = 'row',
+): Promise<void> {
+  const folderName = folderPath.split('/').at(-1) ?? folderPath
+  const fileButton = page.getByRole('button', { name: fileName, exact: true })
+  const folderButton = page.getByRole('button', { name: folderName, exact: true })
+  const source = await getLocatorCenter(fileButton)
+  let target = await getLocatorCenter(folderButton)
+
+  await fileButton.hover()
+  await page.mouse.move(source.x, source.y)
+  await page.mouse.down()
+  await page.mouse.move(target.x, target.y, { steps: 12 })
+
+  if (hoverMs > 0) {
+    await page.waitForTimeout(hoverMs)
+  }
+
+  if (targetArea === 'content') {
+    const contentDropzone = page.locator(`[data-tree-directory-drop-path="${folderPath}"]`).first()
+
+    await expect(contentDropzone).toBeVisible()
+    const box = await contentDropzone.boundingBox()
+    const rowBox = await folderButton.boundingBox()
+
+    if (box === null || rowBox === null) {
+      throw new Error('Expected a visible folder container while dragging')
+    }
+
+    target = {
+      x: Math.min(rowBox.x + rowBox.width / 2, box.x + box.width - 16),
+      y: Math.min(box.y + box.height - 10, rowBox.y + rowBox.height + 10),
+    }
+
+    await page.mouse.move(target.x, target.y, { steps: 8 })
+  }
+
+  await page.mouse.up()
+}
+
+async function dragSidebarFileToRoot(page: Page, fileName: string): Promise<void> {
+  const fileButton = page.getByRole('button', { name: fileName, exact: true })
+  const dropzone = page.locator('.sidebar-tree-dropzone').first()
+  const source = await getLocatorCenter(fileButton)
+  const box = await dropzone.boundingBox()
+
+  if (box === null) {
+    throw new Error('Expected a visible root dropzone')
+  }
+
+  const target = {
+    x: box.x + box.width / 2,
+    y: box.y + box.height - 16,
+  }
+
+  await fileButton.hover()
+  await page.mouse.move(source.x, source.y)
+  await page.mouse.down()
+  await page.mouse.move(target.x, target.y, { steps: 16 })
+  await page.mouse.up()
+}
+
 async function enterRenameModeFromFocusedOpenFile(page: Page, fileName: string): Promise<void> {
   const noteButton = page.getByRole('button', { name: fileName, exact: true })
 
@@ -1459,6 +1538,212 @@ test('reveals file and folder tree actions on hover', async ({ browser }) => {
 
     await fileRow.hover()
     await expect(fileActions).toBeVisible()
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('moves a file into another folder by dragging it onto the folder', async ({ browser }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const sourcePath = `notes/move-me-${runId}.md`
+  const targetPath = `archive/move-me-${runId}.md`
+  const page = await createIsolatedStoragePage(browser, `storage-drag-folder-${runId}`)
+
+  try {
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [
+      { path: sourcePath, content: '# Drag me\n' },
+      { path: `archive/keep-${runId}.md`, content: '# Keep\n' },
+    ])
+
+    await dragSidebarFileToFolder(page, `move-me-${runId}.md`, 'archive', 0, 'content')
+
+    await expect.poll(async () => await readPickedFolderFile(page, sourcePath)).toBe(null)
+    await expect.poll(async () => await readPickedFolderFile(page, targetPath)).toBe('# Drag me\n')
+    await waitForSyncIdle(page)
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('opens a closed folder after hovering during drag and drops the file there', async ({ browser }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const sourcePath = `projects/move-me-${runId}.md`
+  const targetPath = `projects/archive/move-me-${runId}.md`
+  const page = await createIsolatedStoragePage(browser, `storage-drag-hover-${runId}`)
+
+  try {
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [
+      { path: sourcePath, content: '# Drag me\n' },
+      { path: `projects/archive/inside-${runId}.md`, content: '# Inside\n' },
+    ])
+
+    await expect(page.getByRole('button', { name: `inside-${runId}.md`, exact: true })).toHaveCount(0)
+
+    await dragSidebarFileToFolder(page, `move-me-${runId}.md`, 'projects/archive', 1100, 'content')
+
+    await expect(page.getByRole('button', { name: `inside-${runId}.md`, exact: true })).toBeVisible()
+    await expect.poll(async () => await readPickedFolderFile(page, sourcePath)).toBe(null)
+    await expect.poll(async () => await readPickedFolderFile(page, targetPath)).toBe('# Drag me\n')
+    await waitForSyncIdle(page)
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('shows a floating preview while dragging a file', async ({ browser }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const sourcePath = `notes/move-me-${runId}.md`
+  const folderPath = `archive-${runId}`
+  const page = await createIsolatedStoragePage(browser, `storage-drag-preview-${runId}`)
+
+  try {
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [
+      { path: sourcePath, content: '# Drag me\n' },
+      { path: `${folderPath}/inside.md`, content: '# Inside\n' },
+    ])
+
+    const fileButton = page.getByRole('button', { name: `move-me-${runId}.md`, exact: true })
+    const folderButton = page.getByRole('button', { name: folderPath, exact: true })
+    const folderRow = page.locator('.tree-row', { has: folderButton })
+    const folderActions = folderRow.locator('.tree-actions')
+    const source = await getLocatorCenter(fileButton)
+    const target = await getLocatorCenter(folderButton)
+
+    await fileButton.hover()
+    await page.mouse.move(source.x, source.y)
+    await page.mouse.down()
+    await page.mouse.move(target.x, target.y, { steps: 12 })
+
+    await expect(page.locator('.sidebar-drag-preview')).toBeVisible()
+    await expect(page.locator('.sidebar-drag-preview')).toContainText(`move-me-${runId}.md`)
+    await expect(folderActions).toBeHidden()
+    await expect
+      .poll(async () => await folderButton.evaluate((element) => getComputedStyle(element).cursor))
+      .toBe('grabbing')
+    await expect
+      .poll(async () => await folderButton.evaluate((element) => getComputedStyle(element).backgroundColor))
+      .toBe('rgba(34, 197, 94, 0.16)')
+
+    await page.mouse.up()
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('hovering a root file while dragging shows the root dropzone and drops to root', async ({ browser }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const sourcePath = `notes/move-me-${runId}.md`
+  const existingRootPath = `existing-${runId}.md`
+  const targetPath = `move-me-${runId}.md`
+  const page = await createIsolatedStoragePage(browser, `storage-drag-root-file-${runId}`)
+
+  try {
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [
+      { path: sourcePath, content: '# Drag me\n' },
+      { path: existingRootPath, content: '# Existing root\n' },
+    ])
+
+    const fileButton = page.getByRole('button', { name: `move-me-${runId}.md`, exact: true })
+    const rootButton = page.getByRole('button', { name: `existing-${runId}.md`, exact: true })
+    const source = await getLocatorCenter(fileButton)
+    const target = await getLocatorCenter(rootButton)
+
+    await fileButton.hover()
+    await page.mouse.move(source.x, source.y)
+    await page.mouse.down()
+    await page.mouse.move(target.x, target.y, { steps: 12 })
+
+    await expect(page.locator('.sidebar-tree-dropzone')).toHaveClass(/sidebar-tree-dropzone-root-target/)
+
+    await page.mouse.up()
+
+    await expect.poll(async () => await readPickedFolderFile(page, sourcePath)).toBe(null)
+    await expect.poll(async () => await readPickedFolderFile(page, targetPath)).toBe('# Drag me\n')
+    await expect.poll(async () => await readPickedFolderFile(page, existingRootPath)).toBe('# Existing root\n')
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('dropping a dragged file back in place does not enter rename mode', async ({ browser }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const notePath = `stay-put-${runId}.md`
+  const page = await createIsolatedStoragePage(browser, `storage-drag-same-place-${runId}`)
+
+  try {
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [{ path: notePath, content: '# Stay put\n' }])
+
+    await dragSidebarFileToRoot(page, `stay-put-${runId}.md`)
+
+    await expect(page.locator('.tree-row-editor input')).toHaveCount(0)
+    await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('# Stay put\n')
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('moves a file to the root when dropped on empty sidebar space', async ({ browser }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const sourcePath = `notes/move-me-${runId}.md`
+  const targetPath = `move-me-${runId}.md`
+  const page = await createIsolatedStoragePage(browser, `storage-drag-root-${runId}`)
+
+  try {
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [{ path: sourcePath, content: '# Drag me\n' }])
+
+    await dragSidebarFileToRoot(page, `move-me-${runId}.md`)
+
+    await expect.poll(async () => await readPickedFolderFile(page, sourcePath)).toBe(null)
+    await expect.poll(async () => await readPickedFolderFile(page, targetPath)).toBe('# Drag me\n')
+    await waitForSyncIdle(page)
   } finally {
     await page.context().close()
   }

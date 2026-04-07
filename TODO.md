@@ -22,7 +22,9 @@
 - [x] if i throttle my connection (3G in chrome devtools), the note can become conflicted even though i'm just typing normally, it's not being edited from somewhere else. It appears as a "file conflict" (i.e. local) but seems to happen right after a sync finishes. When resolving the conflict, i can clearly see that the file is just "delayed" compared to my current draft.
 - [x] When I switch from OPFS to the file system API (and there are existing notes in the OPFS) I should be asked if i want to transfer existing notes to the file system
 - [x] opening a folder should not open all the subfolders. The minimal fix is to *only* open the folder that was clicked, and keep subfolders closed. Maybe a better fix would be to *remember* the last state (open/close) the subfolders were in before we closed the parent, and restore that state when we re-open the parent
-- [ ] we should be able to drag a file to move it to a different folder, droping on a folder moves it there, hovering (while dragging) on a folder for 1 second should open the folder, and dropping on empty space should move it to the root
+- [x] we should be able to drag a file to move it to a different folder, droping on a folder moves it there, hovering (while dragging) on a folder for 1 second should open the folder, and dropping on empty space should move it to the root
+- [ ] we should be able to also drag and drop a folder, the same way we do a file
+- [ ] we should persist what folder are open to the local machine (indexdb if we're already using that?) so that when i re-open the app, the same folders are open. And if nothing is already persisted, default to closed.
 - [ ] we will need to figure out how to support images (and other attachments)
 - [ ] SSO (see ~/web/foo/index.js for how to use our own internal sso, and ~/web/foo/package.json for how to install it)
 - [ ] if we added a "command palette", what could we put in it? i like the idea

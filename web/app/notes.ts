@@ -1,5 +1,6 @@
 import {
   ensureMarkdownExtension,
+  getName,
   getParentPath,
   joinNotePath,
   normalizeEntryName,
@@ -22,6 +23,10 @@ export type SaveCurrentNoteResult =
   | { status: 'saved'; file: StoredFile }
   | { status: 'reloaded' }
   | { status: 'conflict'; conflict: NoteConflict }
+
+export type MoveFileResult =
+  | { didMove: false; message: string | null }
+  | { didMove: true; message: null }
 
 export type OpenNoteSyncSnapshot = {
   path: string
@@ -385,6 +390,53 @@ export async function renameEntry(context: NoteContext, entry: ListedEntry, name
     return null
   } catch (error) {
     return getRenameFailureMessage(entry.kind, error)
+  }
+}
+
+export async function moveFile(context: NoteContext, path: string, parentPath: string | null): Promise<MoveFileResult> {
+  const currentStorage = context.storage()
+
+  if (currentStorage === null) {
+    return {
+      didMove: false,
+      message: 'Storage is not ready yet.',
+    }
+  }
+
+  context.setErrorMessage(null)
+
+  const entry: ListedEntry = {
+    kind: 'file',
+    path,
+  }
+  const nextPath = joinNotePath(parentPath, getName(path))
+
+  if (nextPath === path) {
+    return {
+      didMove: false,
+      message: null,
+    }
+  }
+
+  if (hasRenameConflict(context.entries(), entry, nextPath)) {
+    return {
+      didMove: false,
+      message: `An entry named "${getName(nextPath)}" already exists here.`,
+    }
+  }
+
+  try {
+    await currentStorage.renameEntry(path, nextPath, 'file')
+    await refreshWorkspace(context, getPreferredRenamePath(context.currentPath(), path, nextPath))
+    return {
+      didMove: true,
+      message: null,
+    }
+  } catch (error) {
+    return {
+      didMove: false,
+      message: getRenameFailureMessage('file', error),
+    }
   }
 }
 

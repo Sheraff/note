@@ -4,7 +4,6 @@
   padding-left: 0;
 
   li {
-    margin: 0.15rem 0;
 
     >.tree-row {
       display: flex;
@@ -49,7 +48,7 @@
         background: rgba(127, 29, 29, 0.2);
         outline: 1px solid rgba(248, 113, 113, 0.22);
 
-        > svg:last-child {
+        >svg:last-child {
           margin-left: auto;
           color: #fda4af;
         }
@@ -64,6 +63,16 @@
           background: #fbbf24;
           box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.28);
         }
+      }
+
+      >.tree-entry.tree-entry-drop-target {
+        background: rgba(34, 197, 94, 0.16);
+        outline: 1px solid rgba(74, 222, 128, 0.38);
+      }
+
+      >.tree-entry.tree-entry-dragging {
+        opacity: 0.18;
+        transform: scale(0.985);
       }
 
       >.tree-entry.tree-entry-conflict {
@@ -119,7 +128,7 @@
     background: transparent;
   }
 
-  > button {
+  >button {
     width: 100%;
     border: none;
     border-radius: 10px;
@@ -131,6 +140,35 @@
     &:hover {
       background: rgba(59, 130, 246, 0.16);
       border-color: transparent;
+    }
+  }
+}
+
+.sidebar-tree-dropzone.sidebar-dragging {
+  user-select: none;
+
+  .tree {
+    .tree-row {
+
+      >.tree-entry,
+      >button.tree-entry {
+        cursor: grabbing;
+      }
+
+      &:hover>.tree-entry,
+      &:focus-within>.tree-entry {
+        background: transparent;
+      }
+
+      >.tree-entry.tree-entry-drop-target {
+        background: rgba(34, 197, 94, 0.16);
+        outline: 1px solid rgba(74, 222, 128, 0.38);
+      }
+
+      >.tree-actions {
+        display: none;
+        pointer-events: none;
+      }
     }
   }
 }

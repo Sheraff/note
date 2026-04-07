@@ -10,6 +10,7 @@ import {
   createNote,
   deleteEntry,
   loadNote,
+  moveFile,
   refreshWorkspace,
   renameEntry,
   saveCurrentNote,
@@ -790,6 +791,30 @@ function App() {
     }
   }
 
+  function handleMoveEntry(path: string, parentPath: string | null) {
+    void (async () => {
+      const saveResult = await flushPendingSave()
+
+      if (isSaveBlockedByConflict(saveResult)) {
+        setErrorMessage(ACTIVE_CONFLICT_MESSAGE)
+        return
+      }
+
+      const result = await moveFile(noteContext, path, parentPath)
+
+      if (result.message !== null) {
+        setErrorMessage(result.message)
+      }
+
+      snapshotCurrentOpenNoteForSync()
+
+      if (shouldSyncAfterSaveResult(saveResult) || result.didMove) {
+        setHasUnsyncedWorkspaceChanges(true)
+        await requestSync({ mode: 'full', skipPendingSave: true })
+      }
+    })().catch(reportError)
+  }
+
   function handleAttachFolder() {
     void (async () => {
       if (!(await prepareForStorageChange())) {
@@ -1035,6 +1060,7 @@ function App() {
           onDeleteEntry={handleDeleteEntry}
           onOpen={handleOpenNote}
           onOpenConflict={handleOpenNote}
+          onMoveEntry={handleMoveEntry}
           onRenameEntry={handleRenameEntry}
           onResolveInDiff={() => {
             void handleOpenConflictDiff().catch(reportError)

@@ -29,6 +29,7 @@ function renderSidebar(
     onCreateFolder: vi.fn(async () => null),
     onCreateNote: vi.fn(async () => null),
     onDeleteEntry: vi.fn(),
+    onMoveEntry: vi.fn(),
     onOpen: vi.fn(),
     onOpenConflict: vi.fn(),
     onRenameEntry: vi.fn(async () => null),
@@ -59,6 +60,7 @@ function getTextbox(): HTMLInputElement {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
@@ -295,6 +297,96 @@ describe('NotesSidebar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete folder notes' }))
 
     expect(props.onDeleteEntry).toHaveBeenCalledWith('notes', 'directory')
+  })
+
+  it('moves a dragged file into a folder through onMoveEntry', async () => {
+    const { props } = renderSidebar(
+      {},
+      [
+        { kind: 'directory', path: 'notes' },
+        { kind: 'file', path: 'notes/today.md' },
+        { kind: 'directory', path: 'archive' },
+      ],
+    )
+
+    fireEvent.dragStart(screen.getByRole('button', { name: 'today.md' }))
+    fireEvent.dragOver(screen.getByRole('button', { name: 'archive' }))
+    fireEvent.drop(screen.getByRole('button', { name: 'archive' }))
+
+    await waitFor(() => {
+      expect(props.onMoveEntry).toHaveBeenCalledWith('notes/today.md', 'archive')
+    })
+  })
+
+  it('moves a dragged file to the root when dropped on empty sidebar space', async () => {
+    const { props } = renderSidebar(
+      {},
+      [
+        { kind: 'directory', path: 'notes' },
+        { kind: 'file', path: 'notes/today.md' },
+      ],
+    )
+
+    const dropzone = document.querySelector('.sidebar-tree-dropzone')
+
+    if (!(dropzone instanceof HTMLDivElement)) {
+      throw new Error('Expected a root dropzone element')
+    }
+
+    fireEvent.dragStart(screen.getByRole('button', { name: 'today.md' }))
+    fireEvent.dragOver(dropzone)
+    fireEvent.drop(dropzone)
+
+    await waitFor(() => {
+      expect(props.onMoveEntry).toHaveBeenCalledWith('notes/today.md', null)
+    })
+  })
+
+  it('opens a hovered closed folder after one second during drag', async () => {
+    vi.useFakeTimers()
+
+    renderSidebar(
+      {},
+      [
+        { kind: 'directory', path: 'projects' },
+        { kind: 'file', path: 'projects/today.md' },
+        { kind: 'directory', path: 'projects/archive' },
+        { kind: 'file', path: 'projects/archive/inside.md' },
+      ],
+    )
+
+    expect(screen.queryByRole('button', { name: 'inside.md' })).toBeNull()
+
+    fireEvent.dragStart(screen.getByRole('button', { name: 'today.md' }))
+    fireEvent.dragOver(screen.getByRole('button', { name: 'archive' }))
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(screen.getByRole('button', { name: 'inside.md' })).toBeTruthy()
+  })
+
+  it('resets the folder hover-open delay after leaving for an already-open folder', async () => {
+    vi.useFakeTimers()
+
+    renderSidebar(
+      {},
+      [
+        { kind: 'directory', path: 'projects' },
+        { kind: 'file', path: 'projects/today.md' },
+        { kind: 'directory', path: 'projects/archive' },
+        { kind: 'file', path: 'projects/archive/inside.md' },
+        { kind: 'directory', path: 'inbox' },
+      ],
+    )
+
+    expect(screen.queryByRole('button', { name: 'inside.md' })).toBeNull()
+
+    fireEvent.dragStart(screen.getByRole('button', { name: 'today.md' }))
+    fireEvent.dragOver(screen.getByRole('button', { name: 'archive' }))
+    await vi.advanceTimersByTimeAsync(500)
+    fireEvent.dragOver(screen.getByRole('button', { name: 'inbox' }))
+    await vi.advanceTimersByTimeAsync(600)
+
+    expect(screen.queryByRole('button', { name: 'inside.md' })).toBeNull()
   })
 
   it('wires the tree conflict actions to the conflict callbacks', () => {
