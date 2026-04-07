@@ -1,5 +1,5 @@
 import { createHotkeyHandler } from '@tanstack/hotkeys'
-import { Show, createSignal, onCleanup } from 'solid-js'
+import { Show, createEffect, createSignal, onCleanup } from 'solid-js'
 import { getParentPath } from '../notes/paths.ts'
 import type { TreeNode } from '../notes/tree.ts'
 import { Codicon } from './Codicon.tsx'
@@ -32,6 +32,71 @@ export function NotesSidebar(props: {
 }) {
   const [pendingCreation, setPendingCreation] = createSignal<PendingCreation | null>(null)
   const [pendingRename, setPendingRename] = createSignal<PendingRename | null>(null)
+  const [directoryOpenByPath, setDirectoryOpenByPath] = createSignal(new Map<string, boolean>())
+
+  function openDirectoryChain(path: string) {
+    const directoryPaths: string[] = []
+    let currentPath: string | null = path
+
+    while (currentPath !== null) {
+      directoryPaths.unshift(currentPath)
+      currentPath = getParentPath(currentPath)
+    }
+
+    setDirectoryOpenByPath((current) => {
+      let next: Map<string, boolean> | null = null
+
+      for (const directoryPath of directoryPaths) {
+        if (current.get(directoryPath) === true) {
+          continue
+        }
+
+        if (next === null) {
+          next = new Map(current)
+        }
+
+        next.set(directoryPath, true)
+      }
+
+      return next ?? current
+    })
+  }
+
+  function setDirectoryOpen(path: string, isOpen: boolean) {
+    setDirectoryOpenByPath((current) => {
+      if (current.get(path) === isOpen) {
+        return current
+      }
+
+      const next = new Map(current)
+      next.set(path, isOpen)
+      return next
+    })
+  }
+
+  function isDirectoryOpen(path: string): boolean {
+    const explicitState = directoryOpenByPath().get(path)
+
+    if (explicitState !== undefined) {
+      return explicitState
+    }
+
+    return getParentPath(path) === null
+  }
+
+  createEffect(() => {
+    const path = props.currentPath
+
+    if (path === null) {
+      return
+    }
+
+    const parentPath = getParentPath(path)
+
+    if (parentPath !== null) {
+      openDirectoryChain(parentPath)
+    }
+  })
 
   function clearPendingAction() {
     setPendingCreation(null)
@@ -39,6 +104,10 @@ export function NotesSidebar(props: {
   }
 
   function startCreation(kind: TreeNode['kind'], parentPath: string | null) {
+    if (parentPath !== null) {
+      openDirectoryChain(parentPath)
+    }
+
     setPendingRename(null)
     setPendingCreation({ kind, parentPath })
   }
@@ -149,8 +218,10 @@ export function NotesSidebar(props: {
           conflict={props.conflict}
           conflictPaths={props.conflictPaths}
           currentPath={props.currentPath}
+          isDirectoryOpen={isDirectoryOpen}
           parentPath={null}
           nodes={props.nodes}
+          onSetDirectoryOpen={setDirectoryOpen}
           unsavedPath={props.unsavedPath}
           onAcceptTheirs={props.onAcceptTheirs}
           pendingCreation={pendingCreation()}

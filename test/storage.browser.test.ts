@@ -1531,6 +1531,73 @@ test('does not enter folder rename mode on a second click of a focused folder', 
   }
 })
 
+test('remembers nested folder state when reopening a parent folder', async ({ browser }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const parentPath = `parent-${runId}`
+  const childFolderName = `child-${runId}`
+  const childPath = `${parentPath}/${childFolderName}`
+  const fileName = `inside-${runId}.md`
+  const notePath = `${childPath}/${fileName}`
+  const page = await createIsolatedStoragePage(browser, `storage-folder-state-${runId}`)
+
+  try {
+    await installStorageHarness(page, {
+      appOpfsRootName: `app-opfs-${runId}`,
+      pickedFolderName,
+      queryPermission: 'prompt',
+      requestPermission: 'granted',
+    })
+
+    await attachPickedFolder(page, [{ path: notePath, content: '# Nested folder state\n' }])
+
+    const parentButton = page.getByRole('button', { name: parentPath, exact: true })
+    const childButton = page.getByRole('button', { name: childFolderName, exact: true })
+    const noteButton = page.getByRole('button', { name: fileName, exact: true })
+
+    await expect(parentButton).toBeVisible()
+    await expect(parentButton).toHaveAttribute('aria-expanded', 'true')
+    await expect(childButton).toBeVisible()
+    await expect(childButton).toHaveAttribute('aria-expanded', 'true')
+    await expect(noteButton).toBeVisible()
+
+    await childButton.click()
+
+    await expect(childButton).toHaveAttribute('aria-expanded', 'false')
+    await expect(noteButton).toHaveCount(0)
+
+    await parentButton.click()
+
+    await expect(parentButton).toHaveAttribute('aria-expanded', 'false')
+    await expect(childButton).toHaveCount(0)
+    await expect(noteButton).toHaveCount(0)
+
+    await parentButton.click()
+
+    await expect(parentButton).toHaveAttribute('aria-expanded', 'true')
+    await expect(childButton).toBeVisible()
+    await expect(childButton).toHaveAttribute('aria-expanded', 'false')
+    await expect(noteButton).toHaveCount(0)
+
+    await childButton.click()
+
+    await expect(childButton).toHaveAttribute('aria-expanded', 'true')
+    await expect(noteButton).toBeVisible()
+
+    await parentButton.click()
+    await expect(parentButton).toHaveAttribute('aria-expanded', 'false')
+
+    await parentButton.click()
+
+    await expect(parentButton).toHaveAttribute('aria-expanded', 'true')
+    await expect(childButton).toBeVisible()
+    await expect(childButton).toHaveAttribute('aria-expanded', 'true')
+    await expect(noteButton).toBeVisible()
+  } finally {
+    await page.context().close()
+  }
+})
+
 test('selects only the basename when file rename mode opens', async ({ browser }) => {
   const runId = randomUUID()
   const pickedFolderName = `picked-${runId}`

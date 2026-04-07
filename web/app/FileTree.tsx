@@ -321,6 +321,7 @@ function DirectoryNode(props: {
   conflict: { labels: ConflictActionLabels; path: string } | null
   conflictPaths: string[]
   currentPath: string | null
+  isDirectoryOpen(path: string): boolean
   node: TreeNode
   unsavedPath: string | null
   pendingCreation: PendingCreation | null
@@ -332,6 +333,7 @@ function DirectoryNode(props: {
   onDelete(path: string, kind: TreeNode['kind']): void
   onOpen(path: string): void
   onOpenConflict(path: string): void
+  onSetDirectoryOpen(path: string, isOpen: boolean): void
   onResolveInDiff(): void
   onSaveMine(): void
   onSaveMineSeparately(): void
@@ -339,14 +341,8 @@ function DirectoryNode(props: {
   onSubmitCreation(name: string, submitSource: EntryEditorSubmitSource): Promise<string | null>
   onSubmitRename(name: string): Promise<string | null>
 }) {
-  const [isOpen, setIsOpen] = createSignal(true)
+  const isOpen = () => props.isDirectoryOpen(props.node.path)
   const hasClosedDescendantConflict = () => !isOpen() && hasDescendantConflictPath(props.conflict, props.conflictPaths, props.node.path)
-
-  createEffect(() => {
-    if (props.pendingCreation?.parentPath === props.node.path) {
-      setIsOpen(true)
-    }
-  })
 
   return (
     <>
@@ -360,7 +356,7 @@ function DirectoryNode(props: {
               type="button"
               aria-expanded={isOpen() ? 'true' : 'false'}
               onClick={() => {
-                setIsOpen(!isOpen())
+                props.onSetDirectoryOpen(props.node.path, !isOpen())
               }}
             >
               <Codicon name={isOpen() ? 'folder-opened' : 'folder'} />
@@ -430,8 +426,10 @@ function DirectoryNode(props: {
           conflict={props.conflict}
           conflictPaths={props.conflictPaths}
           currentPath={props.currentPath}
+          isDirectoryOpen={props.isDirectoryOpen}
           parentPath={props.node.path}
           nodes={props.node.children}
+          onSetDirectoryOpen={props.onSetDirectoryOpen}
           unsavedPath={props.unsavedPath}
           onAcceptTheirs={props.onAcceptTheirs}
           pendingCreation={props.pendingCreation}
@@ -458,8 +456,10 @@ export function FileTree(props: {
   conflict: { labels: ConflictActionLabels; path: string } | null
   conflictPaths: string[]
   currentPath: string | null
+  isDirectoryOpen(path: string): boolean
   parentPath: string | null
   nodes: TreeNode[]
+  onSetDirectoryOpen(path: string, isOpen: boolean): void
   unsavedPath: string | null
   onAcceptTheirs(): void
   pendingCreation: PendingCreation | null
@@ -507,6 +507,7 @@ export function FileTree(props: {
                   conflict={props.conflict}
                   conflictPaths={props.conflictPaths}
                   currentPath={props.currentPath}
+                  isDirectoryOpen={props.isDirectoryOpen}
                   node={currentNode()}
                   unsavedPath={props.unsavedPath}
                   onAcceptTheirs={props.onAcceptTheirs}
@@ -518,6 +519,7 @@ export function FileTree(props: {
                   onDelete={props.onDelete}
                   onOpen={props.onOpen}
                   onOpenConflict={props.onOpenConflict}
+                  onSetDirectoryOpen={props.onSetDirectoryOpen}
                   onResolveInDiff={props.onResolveInDiff}
                   onSaveMine={props.onSaveMine}
                   onSaveMineSeparately={props.onSaveMineSeparately}
