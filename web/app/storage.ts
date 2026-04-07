@@ -64,10 +64,12 @@ export async function bootstrapWorkspace(context: StorageContext) {
   context.setReconnectableDirectoryName(handle?.name ?? null)
 }
 
-export async function attachFolder(context: StorageContext): Promise<boolean> {
+export async function pickFolderHandle(
+  context: Pick<StorageContext, 'setErrorMessage'>,
+): Promise<FileSystemDirectoryHandle | null> {
   if (!isDirectoryPickerSupported()) {
     context.setErrorMessage('This browser does not support the File System Access API.')
-    return false
+    return null
   }
 
   let handle: FileSystemDirectoryHandle
@@ -76,7 +78,7 @@ export async function attachFolder(context: StorageContext): Promise<boolean> {
     handle = await pickDirectoryHandle()
   } catch (error) {
     if (isAbortError(error)) {
-      return false
+      return null
     }
 
     throw error
@@ -86,6 +88,10 @@ export async function attachFolder(context: StorageContext): Promise<boolean> {
     throw new Error('Folder access was not granted')
   }
 
+  return handle
+}
+
+export async function activateDirectoryHandle(context: StorageContext, handle: FileSystemDirectoryHandle) {
   await setDirectoryHandle(handle)
   await activateStorage(
     context,
@@ -95,6 +101,16 @@ export async function attachFolder(context: StorageContext): Promise<boolean> {
       backend: 'directory',
     },
   )
+}
+
+export async function attachFolder(context: StorageContext): Promise<boolean> {
+  const handle = await pickFolderHandle(context)
+
+  if (handle === null) {
+    return false
+  }
+
+  await activateDirectoryHandle(context, handle)
 
   return true
 }

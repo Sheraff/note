@@ -19,7 +19,14 @@ import {
   type RefreshWorkspaceOptions,
   type SaveCurrentNoteResult,
 } from './app/notes.ts'
-import { attachFolder, bootstrapWorkspace, reconnectFolder, switchToOpfs, type StorageContext } from './app/storage.ts'
+import {
+  activateDirectoryHandle,
+  bootstrapWorkspace,
+  pickFolderHandle,
+  reconnectFolder,
+  switchToOpfs,
+  type StorageContext,
+} from './app/storage.ts'
 import {
   createSyncRequester,
   syncNow,
@@ -29,8 +36,16 @@ import {
 import type { MonacoController } from './editor/monaco.ts'
 import { createConflictCopyPath } from './notes/paths.ts'
 import { buildTree } from './notes/tree.ts'
-import { DEFAULT_APP_SETTINGS, type AppSettings, type SyncState } from './schemas.ts'
-import { setAppSettings } from './storage/metadata.ts'
+import { DEFAULT_APP_SETTINGS, DEFAULT_SYNC_STATE, type AppSettings, type SyncState } from './schemas.ts'
+import { setAppSettings, setSyncState as persistSyncState } from './storage/metadata.ts'
+import { createDirectoryStorage } from './storage/file-system-access.ts'
+import { createOpfsStorage } from './storage/opfs.ts'
+import {
+  copyStorageEntries,
+  getStorageTransferConflicts,
+  replaceStorageEntries,
+  type StorageTransferConflict,
+} from './storage/transfer.ts'
 import type { ListedEntry, NoteStorage, StoredFile } from './storage/types.ts'
 import './App.css'
 
@@ -66,6 +81,14 @@ function getConflictSourceActionLabel(conflict: NoteConflict, action: 'accept' |
   const sourceLabel = conflict.source === 'remote' ? 'cloud' : 'file'
 
   return conflict.diskFile === null ? `${prefix} ${sourceLabel} deletion` : `${prefix} ${sourceLabel} version`
+}
+
+function getOpfsTransferPrompt(directoryName: string): string {
+  return `Transfer existing OPFS notes and folders to ${directoryName} before switching?`
+}
+
+function getStorageTransferConflictMessage(directoryName: string, conflict: StorageTransferConflict): string {
+  return `Can't transfer OPFS notes because ${conflict.path} already exists in ${directoryName}.`
 }
 
 function App() {
@@ -773,10 +796,34 @@ function App() {
         return
       }
 
-      const didAttachFolder = await attachFolder(storageContext)
+      const currentStorage = storage()
+      const sourceEntries = currentStorage?.key === 'opfs' ? await currentStorage.listEntries() : []
+      const handle = await pickFolderHandle(storageContext)
+      let didTransfer = false
 
-      if (!didAttachFolder) {
+      if (handle === null) {
         return
+      }
+
+      const nextStorage = createDirectoryStorage(handle)
+      const targetEntries = await nextStorage.listEntries()
+
+      if (currentStorage?.key === 'opfs' && sourceEntries.length > 0 && window.confirm(getOpfsTransferPrompt(handle.name))) {
+        const conflicts = await getStorageTransferConflicts(currentStorage, nextStorage, sourceEntries, targetEntries)
+
+        if (conflicts.length > 0) {
+          throw new Error(getStorageTransferConflictMessage(handle.name, conflicts[0]))
+        }
+
+        await copyStorageEntries(currentStorage, nextStorage, sourceEntries)
+        didTransfer = true
+      }
+
+      await activateDirectoryHandle(storageContext, handle)
+
+      if (currentStorage?.key === 'opfs' && !didTransfer && targetEntries.length === 0) {
+        setSyncStateSignal(DEFAULT_SYNC_STATE)
+        await persistSyncState(DEFAULT_SYNC_STATE)
       }
 
       await requestSync({ mode: 'full' })
@@ -798,6 +845,12 @@ function App() {
     void (async () => {
       if (!(await prepareForStorageChange())) {
         return
+      }
+
+      const currentStorage = storage()
+
+      if (currentStorage?.key === 'directory') {
+        await replaceStorageEntries(currentStorage, createOpfsStorage())
       }
 
       await switchToOpfs(storageContext)

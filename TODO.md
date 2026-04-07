@@ -20,7 +20,7 @@
 - [x] all (most?) buttons should have a keyboard shortcut (use tanstack/hotkeys)
 - [x] unsaved notes should have an indication that they are not saved yet
 - [x] if i throttle my connection (3G in chrome devtools), the note can become conflicted even though i'm just typing normally, it's not being edited from somewhere else. It appears as a "file conflict" (i.e. local) but seems to happen right after a sync finishes. When resolving the conflict, i can clearly see that the file is just "delayed" compared to my current draft.
-- [ ] When I switch from OPFS to the file system API (and there are existing notes in the OPFS) I should be asked if i want to transfer existing notes to the file system
+- [x] When I switch from OPFS to the file system API (and there are existing notes in the OPFS) I should be asked if i want to transfer existing notes to the file system
 - [ ] we should be able to drag a file to move it to a different folder, droping on a folder moves it there, hovering (while dragging) on a folder for 1 second should open the folder, and dropping on empty space should move it to the root
 - [ ] opening a folder should not open all the subfolders. The minimal fix is to *only* open the folder that was clicked, and keep subfolders closed. Maybe a better fix would be to *remember* the last state (open/close) the subfolders were in before we closed the parent, and restore that state when we re-open the parent
 - [ ] we will need to figure out how to support images (and other attachments)

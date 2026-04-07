@@ -267,6 +267,39 @@ async function readPickedFolderFile(page: Page, path: string): Promise<string | 
   }, path)
 }
 
+async function listPickedFolderEntries(page: Page): Promise<Array<{ kind: 'directory' | 'file'; path: string }>> {
+  return page.evaluate(async () => {
+    const testApi = (globalThis as unknown as {
+      __noteStorageBrowserTest: {
+        getPickedDirectoryHandle(): Promise<FileSystemDirectoryHandle>
+      }
+    }).__noteStorageBrowserTest
+
+    async function walk(
+      directory: FileSystemDirectoryHandle,
+      currentPrefix = '',
+    ): Promise<Array<{ kind: 'directory' | 'file'; path: string }>> {
+      const entries: Array<{ kind: 'directory' | 'file'; path: string }> = []
+
+      for await (const [name, handle] of directory.entries()) {
+        const path = currentPrefix.length > 0 ? `${currentPrefix}/${name}` : name
+
+        entries.push({ kind: handle.kind, path })
+
+        if (handle.kind === 'directory') {
+          entries.push(...(await walk(handle, path)))
+        }
+      }
+
+      return entries
+    }
+
+    return (await walk(await testApi.getPickedDirectoryHandle())).sort(
+      (left, right) => left.path.localeCompare(right.path) || left.kind.localeCompare(right.kind),
+    )
+  })
+}
+
 async function readOpfsFile(page: Page, path: string): Promise<string | null> {
   return page.evaluate(async (targetPath) => {
     const root = await navigator.storage.getDirectory()
@@ -1106,7 +1139,186 @@ test('keeps the current OPFS workspace active when attach folder is cancelled', 
   await expect(page.locator('.editor-empty-panel')).toHaveCount(0)
 })
 
-test('switches from an attached folder back to OPFS and keeps OPFS after reopening', async ({ page }) => {
+test('offers to transfer OPFS notes and copies them into the picked folder when accepted', async ({ page }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const emptyFolderPath = `transfer-empty-${runId}`
+  const noteName = `copied-${runId}`
+
+  await installStorageHarness(page, {
+    appOpfsRootName: `app-opfs-${runId}`,
+    pickedFolderName,
+    queryPermission: 'prompt',
+    requestPermission: 'granted',
+  })
+  await installTestUserHeader(page, `storage-page-${runId}`)
+
+  await page.goto('/')
+  await expect(page).toHaveTitle('Note')
+  await waitForSyncIdle(page)
+
+  await createFolderFromSidebar(page, emptyFolderPath)
+  const notePath = await createNoteFromSidebar(page, noteName)
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.type()).toBe('confirm')
+    expect(dialog.message()).toBe(`Transfer existing OPFS notes and folders to ${pickedFolderName} before switching?`)
+    await dialog.accept()
+  })
+
+  await page.locator('.statusbar-storage').getByRole('button', { name: 'OPFS', exact: true }).click()
+  await page.locator('.statusbar-storage-popover').getByRole('button', { name: 'Attach folder' }).click()
+  await waitForSyncIdle(page)
+
+  await expect(page.locator('.statusbar-storage').getByRole('button', { name: pickedFolderName, exact: true })).toBeVisible()
+  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('# Untitled\n')
+  await expect.poll(async () => await listPickedFolderEntries(page)).toEqual([
+    { kind: 'file', path: notePath },
+    { kind: 'directory', path: emptyFolderPath },
+  ])
+})
+
+test('accepting the transfer prompt does not create a conflict for a pre-existing folder file with deleted remote history', async ({ page }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const historicalName = `historical-${runId}`
+  const currentName = `current-${runId}`
+  const historicalPath = `${historicalName}.md`
+
+  await installStorageHarness(page, {
+    appOpfsRootName: `app-opfs-${runId}`,
+    pickedFolderName,
+    queryPermission: 'prompt',
+    requestPermission: 'granted',
+  })
+  await installTestUserHeader(page, `storage-page-${runId}`)
+
+  await page.goto('/')
+  await expect(page).toHaveTitle('Note')
+  await waitForSyncIdle(page)
+
+  const currentPath = await createNoteFromSidebar(page, currentName)
+  const deletedPath = await createNoteFromSidebar(page, historicalName)
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toBe(`Delete ${deletedPath}?`)
+    await dialog.accept()
+  })
+
+  await page.getByRole('button', { name: historicalPath, exact: true }).hover()
+  await page.getByRole('button', { name: `Delete ${deletedPath}`, exact: true }).click()
+  await waitForSyncIdle(page)
+
+  await writePickedFolderFiles(page, [{ path: historicalPath, content: '# From attached folder\n' }])
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.type()).toBe('confirm')
+    expect(dialog.message()).toBe(`Transfer existing OPFS notes and folders to ${pickedFolderName} before switching?`)
+    await dialog.accept()
+  })
+
+  await page.locator('.statusbar-storage').getByRole('button', { name: 'OPFS', exact: true }).click()
+  await page.locator('.statusbar-storage-popover').getByRole('button', { name: 'Attach folder' }).click()
+  await waitForSyncIdle(page)
+
+  await expect(page.locator('.statusbar-storage').getByRole('button', { name: pickedFolderName, exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: currentPath, exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: historicalPath, exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: `Cloud conflict: ${historicalPath}` })).toHaveCount(0)
+  await expect.poll(async () => await readPickedFolderFile(page, historicalPath)).toBe('# From attached folder\n')
+})
+
+test('switches to the picked folder without deleting synced notes when the transfer prompt is declined', async ({ page }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const noteName = `declined-${runId}`
+
+  await installStorageHarness(page, {
+    appOpfsRootName: `app-opfs-${runId}`,
+    pickedFolderName,
+    queryPermission: 'prompt',
+    requestPermission: 'granted',
+  })
+  await installTestUserHeader(page, `storage-page-${runId}`)
+
+  await page.goto('/')
+  await expect(page).toHaveTitle('Note')
+  await waitForSyncIdle(page)
+
+  const notePath = await createNoteFromSidebar(page, noteName)
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.type()).toBe('confirm')
+    expect(dialog.message()).toBe(`Transfer existing OPFS notes and folders to ${pickedFolderName} before switching?`)
+    await dialog.dismiss()
+  })
+
+  await page.locator('.statusbar-storage').getByRole('button', { name: 'OPFS', exact: true }).click()
+  await page.locator('.statusbar-storage-popover').getByRole('button', { name: 'Attach folder' }).click()
+  await waitForSyncIdle(page)
+
+  await expect(page.locator('.statusbar-storage').getByRole('button', { name: pickedFolderName, exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: notePath, exact: true })).toBeVisible()
+  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('# Untitled\n')
+  await expect.poll(async () => await readOpfsFile(page, notePath)).toBe('# Untitled\n')
+})
+
+test('reattaching the same non-empty folder without transfer does not surface cloud conflicts after switching back to OPFS', async ({ page }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const opfsName = `opfs-${runId}`
+  const folderOnlyPath = `folder-only-${runId}.md`
+
+  await installStorageHarness(page, {
+    appOpfsRootName: `app-opfs-${runId}`,
+    pickedFolderName,
+    queryPermission: 'prompt',
+    requestPermission: 'granted',
+  })
+  await installTestUserHeader(page, `storage-page-${runId}`)
+
+  await page.goto('/')
+  await expect(page).toHaveTitle('Note')
+  await waitForSyncIdle(page)
+
+  const opfsPath = await createNoteFromSidebar(page, opfsName)
+
+  await writePickedFolderFiles(page, [{ path: folderOnlyPath, content: '# Folder only\n' }])
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.type()).toBe('confirm')
+    expect(dialog.message()).toBe(`Transfer existing OPFS notes and folders to ${pickedFolderName} before switching?`)
+    await dialog.accept()
+  })
+
+  await page.locator('.statusbar-storage').getByRole('button', { name: 'OPFS', exact: true }).click()
+  await page.locator('.statusbar-storage-popover').getByRole('button', { name: 'Attach folder' }).click()
+  await waitForSyncIdle(page)
+
+  await expect(page.getByRole('button', { name: folderOnlyPath, exact: true })).toBeVisible()
+
+  await page.locator('.statusbar-storage').getByRole('button', { name: pickedFolderName, exact: true }).click()
+  await page.locator('.statusbar-storage-popover').getByRole('button', { name: 'Use OPFS' }).click()
+  await waitForSyncIdle(page)
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.type()).toBe('confirm')
+    expect(dialog.message()).toBe(`Transfer existing OPFS notes and folders to ${pickedFolderName} before switching?`)
+    await dialog.dismiss()
+  })
+
+  await page.locator('.statusbar-storage').getByRole('button', { name: 'OPFS', exact: true }).click()
+  await page.locator('.statusbar-storage-popover').getByRole('button', { name: 'Attach folder' }).click()
+  await waitForSyncIdle(page)
+
+  await expect(page.locator('.statusbar-storage').getByRole('button', { name: pickedFolderName, exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: opfsPath, exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: folderOnlyPath, exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: `Cloud conflict: ${folderOnlyPath}` })).toHaveCount(0)
+  await expect.poll(async () => await readPickedFolderFile(page, folderOnlyPath)).toBe('# Folder only\n')
+})
+
+test('switches from an attached folder back to OPFS, keeps the folder files, and persists OPFS after reopening', async ({ page }) => {
   const runId = randomUUID()
   const pickedFolderName = `picked-${runId}`
   const directoryNotePath = `switch-${runId}/from-directory-${runId}.md`
@@ -1136,10 +1348,12 @@ test('switches from an attached folder back to OPFS and keeps OPFS after reopeni
   await waitForSyncIdle(page)
 
   await expect(page.locator('.statusbar-storage').getByRole('button', { name: 'OPFS', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: `from-directory-${runId}.md`, exact: true })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: `other-directory-${runId}.md`, exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: `from-directory-${runId}.md`, exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: `other-directory-${runId}.md`, exact: true })).toHaveAttribute('aria-current', 'true')
   await expect.poll(async () => await readPickedFolderFile(page, directoryNotePath)).toBe('# Directory note\n')
   await expect.poll(async () => await readPickedFolderFile(page, secondDirectoryNotePath)).toBe('# Other directory note\n')
+  await expect.poll(async () => await readOpfsFile(page, directoryNotePath)).toBe('# Directory note\n')
+  await expect.poll(async () => await readOpfsFile(page, secondDirectoryNotePath)).toBe('# Other directory note\n')
 
   const opfsNotePath = await createNoteFromSidebar(page, opfsNoteName)
   const syncResponsePromise = waitForNextSyncPush(page)
@@ -1159,8 +1373,8 @@ test('switches from an attached folder back to OPFS and keeps OPFS after reopeni
   await waitForSyncIdle(reopenedPage)
 
   await expect(reopenedPage.locator('.statusbar-storage').getByRole('button', { name: 'OPFS', exact: true })).toBeVisible()
-  await expect(reopenedPage.getByRole('button', { name: `from-directory-${runId}.md`, exact: true })).toHaveCount(0)
-  await expect(reopenedPage.getByRole('button', { name: `other-directory-${runId}.md`, exact: true })).toHaveCount(0)
+  await expect(reopenedPage.getByRole('button', { name: `from-directory-${runId}.md`, exact: true })).toBeVisible()
+  await expect(reopenedPage.getByRole('button', { name: `other-directory-${runId}.md`, exact: true })).toBeVisible()
   await expect(reopenedPage.getByRole('button', { name: opfsNotePath, exact: true })).toHaveAttribute('aria-current', 'true')
   await expectEditorToContain(reopenedPage, '# Saved in OPFS after switch')
 })
