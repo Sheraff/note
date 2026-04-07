@@ -235,6 +235,20 @@ describe('client sync helpers', () => {
     expect((await storage.readTextFile('notes/keep-local.md'))?.content).toBe('local only')
   })
 
+  it('skips overwriting a file when local content changed after the sync started', async () => {
+    const path = 'notes/today.md'
+    const syncedLocalFile = await createStoredFile(path, 'first saved draft', '2026-04-03T11:00:00.000Z')
+    const newerLocalFile = await createStoredFile(path, 'newer local draft', '2026-04-03T12:00:00.000Z')
+    const storage = createMemoryStorage([newerLocalFile])
+    const previousRemoteFiles = [await createRemoteFile(path, 'base remote version', '2026-04-03T10:00:00.000Z')]
+    const remoteFiles = [await createRemoteFile(path, 'first saved draft', '2026-04-03T11:00:00.000Z')]
+
+    const result = await applyRemoteSnapshot(storage, previousRemoteFiles, remoteFiles, new Set(), [syncedLocalFile])
+
+    expect(result).toEqual({ hasSkippedLocalChanges: true })
+    expect((await storage.readTextFile(path))?.content).toBe('newer local draft')
+  })
+
   it('serializes sync requests and preserves pending-save syncs', async () => {
     const firstRun = createDeferred()
     const runCalls: Array<{ mode: SyncMode; skipPendingSave: boolean }> = []
@@ -437,6 +451,40 @@ describe('client sync helpers', () => {
       loadedSnapshot: mineFile,
       source: 'remote',
     })
+  })
+
+  it('keeps local changes marked dirty when an in-flight sync response is older than the current file', async () => {
+    const path = 'notes/today.md'
+    const previousRemoteFile = await createRemoteFile(path, 'base remote version', '2026-04-03T10:00:00.000Z')
+    const firstSavedLocalFile = await createStoredFile(path, 'first saved draft', '2026-04-03T11:00:00.000Z')
+    const storage = createMemoryStorage([firstSavedLocalFile])
+    const syncState: SyncState = {
+      files: [previousRemoteFile],
+      lastSyncedAt: null,
+    }
+    const context = createSyncContext({
+      currentPath: path,
+      storage,
+      syncState,
+    })
+    const fetchMock = vi.fn(async (input: string) => {
+      expect(input).toBe('/api/sync/push')
+
+      await storage.writeTextFile(path, 'newer local draft')
+
+      return createJsonResponse({
+        files: [await createRemoteFile(path, 'first saved draft', '2026-04-03T11:00:00.000Z')],
+        conflicts: [],
+      })
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    await syncNow(context, { mode: 'full', skipPendingSave: true })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect((await storage.readTextFile(path))?.content).toBe('newer local draft')
+    expect(context.setHasKnownLocalChangesSinceSync).toHaveBeenCalledWith(true)
   })
 
   it('skips blocked conflict paths during a follow-up sync', async () => {

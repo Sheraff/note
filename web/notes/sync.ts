@@ -8,6 +8,14 @@ export type SyncConflictDetails = {
   theirsFile: StoredFile | null
 }
 
+function areSameStoredFile(left: StoredFile | null | undefined, right: StoredFile | null | undefined): boolean {
+  if (left == null || right == null) {
+    return left == null && right == null
+  }
+
+  return left.path === right.path && left.contentHash === right.contentHash
+}
+
 function createBaseEntry(file: RemoteFile | undefined): SyncBaseEntry | null {
   if (file === undefined) {
     return null
@@ -72,10 +80,13 @@ export async function applyRemoteSnapshot(
   previousRemoteFiles: RemoteFile[],
   remoteFiles: RemoteFile[],
   skippedPaths: ReadonlySet<string> = new Set(),
-): Promise<void> {
-  const localFiles = await storage.listFiles()
-  const localByPath = new Map(localFiles.map((file) => [file.path, file]))
+  syncStartLocalFiles?: StoredFile[],
+): Promise<{ hasSkippedLocalChanges: boolean }> {
+  const currentLocalFiles = await storage.listFiles()
+  const currentLocalByPath = new Map(currentLocalFiles.map((file) => [file.path, file]))
+  const syncStartLocalByPath = new Map((syncStartLocalFiles ?? currentLocalFiles).map((file) => [file.path, file]))
   const remoteByPath = new Map(remoteFiles.map((file) => [file.path, file]))
+  let hasSkippedLocalChanges = false
 
   for (const previous of previousRemoteFiles) {
     if (previous.deletedAt !== null || skippedPaths.has(previous.path)) {
@@ -85,6 +96,11 @@ export async function applyRemoteSnapshot(
     const remote = remoteByPath.get(previous.path)
 
     if (remote === undefined || remote.deletedAt !== null) {
+      if (!areSameStoredFile(currentLocalByPath.get(previous.path), syncStartLocalByPath.get(previous.path))) {
+        hasSkippedLocalChanges = true
+        continue
+      }
+
       await storage.deleteEntry(previous.path)
     }
   }
@@ -94,14 +110,21 @@ export async function applyRemoteSnapshot(
       continue
     }
 
-    const local = localByPath.get(remote.path)
+    const local = currentLocalByPath.get(remote.path)
 
     if (local?.contentHash === remote.contentHash) {
       continue
     }
 
+    if (!areSameStoredFile(local, syncStartLocalByPath.get(remote.path))) {
+      hasSkippedLocalChanges = true
+      continue
+    }
+
     await storage.writeTextFile(remote.path, remote.content)
   }
+
+  return { hasSkippedLocalChanges }
 }
 
 function toConflictStoredFile(file: RemoteFile | null): StoredFile | null {
@@ -150,14 +173,20 @@ export async function syncWithServer(options: {
 }): Promise<{
   syncState: SyncState
   conflicts: SyncConflictDetails[]
+  hasSkippedLocalChanges: boolean
 }> {
   const now = new Date().toISOString()
   const localFiles = await options.storage.listFiles()
   const changes = buildLocalChanges(options.previousState.files, localFiles, now, options.blockedPaths)
   const response = await options.api.pushChanges({ changes })
   const conflicts = resolveSyncConflicts(response.conflicts)
-
-  await applyRemoteSnapshot(options.storage, options.previousState.files, response.files, new Set(conflicts.map((conflict) => conflict.path)))
+  const snapshotResult = await applyRemoteSnapshot(
+    options.storage,
+    options.previousState.files,
+    response.files,
+    new Set(conflicts.map((conflict) => conflict.path)),
+    localFiles,
+  )
 
   return {
     syncState: {
@@ -165,5 +194,6 @@ export async function syncWithServer(options: {
       lastSyncedAt: new Date().toISOString(),
     },
     conflicts,
+    hasSkippedLocalChanges: snapshotResult.hasSkippedLocalChanges,
   }
 }

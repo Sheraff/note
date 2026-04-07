@@ -1186,6 +1186,48 @@ test('does not sync when a pending autosave hits a local file conflict', async (
   await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(baseContent)
 })
 
+test('does not surface a local file conflict when an older in-flight sync finishes after a newer autosave', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-race-${runId}`
+  const path = `sync-race-${runId}/typing.md`
+  const baseContent = '# Base version\n'
+  const firstDraft = '# First saved draft\n'
+  const finalDraft = '# Final draft after slow sync\n'
+
+  await setupSyncedWorkspace(page, request, [{ path, content: baseContent }], userId)
+
+  let delayedPushCount = 0
+
+  await page.route('**/api/sync/push', async (route) => {
+    delayedPushCount += 1
+
+    if (delayedPushCount === 1) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 800)
+      })
+    }
+
+    await route.continue()
+  })
+
+  const syncRequests = await countSyncRequestsDuring(
+    page,
+    async () => {
+      await replaceEditorContent(page, firstDraft)
+      await page.waitForTimeout(450)
+      await replaceEditorContent(page, finalDraft)
+      await page.waitForTimeout(450)
+    },
+    { settleMs: 1_000 },
+  )
+
+  expect(syncRequests).toEqual({ manifest: 0, push: 2 })
+  await expect(page.getByRole('button', { name: /File conflict:/ })).toHaveCount(0)
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(finalDraft)
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(finalDraft)
+  await expectEditorToContain(page, '# Final draft after slow sync')
+})
+
 test('keeps workspace changes dirty until a full sync succeeds, then falls back to manifest prechecks', async ({ page, request }) => {
   const runId = randomUUID()
   const userId = `sync-dirty-${runId}`

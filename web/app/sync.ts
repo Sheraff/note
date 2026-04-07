@@ -116,7 +116,7 @@ async function runFullSync(context: SyncContext, storage: NoteStorage): Promise<
   if (blockedPaths.size === 0) {
     context.setQueuedNoteConflicts([])
     context.setNoteConflict(null)
-    context.setHasKnownLocalChangesSinceSync(false)
+    context.setHasKnownLocalChangesSinceSync(result.hasSkippedLocalChanges)
   } else {
     context.setHasKnownLocalChangesSinceSync(true)
   }
