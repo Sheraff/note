@@ -10,6 +10,7 @@ import type { ViteDevServer } from 'vite'
 import * as v from 'valibot'
 import { authenticateRequest } from './auth.ts'
 import { getCurrentSyncCursor, listFiles, listFilesSinceCursor } from './db.ts'
+import { sValidator } from '@hono/standard-validator'
 import {
   AuthRedirectResponseSchema,
   HealthResponseSchema,
@@ -81,18 +82,10 @@ export function createApp() {
     )
   })
 
-  function parseSinceCursor(value: string | undefined): number {
-    if (value === undefined) {
-      return 0
-    }
-
-    return v.parse(SyncCursorSchema, Number(value))
-  }
-
-  app.get('/api/sync/manifest', (c) => {
+  app.get('/api/sync/manifest', sValidator('query', v.object({ sinceCursor: v.pipe(v.string(), v.toNumber(), SyncCursorSchema) })), (c) => {
     const userId = c.get('currentUserId')
     const currentCursor = getCurrentSyncCursor()
-    const sinceCursor = Math.min(parseSinceCursor(c.req.query('sinceCursor')), currentCursor)
+    const sinceCursor = Math.min(c.req.valid('query').sinceCursor, currentCursor)
 
     return c.json(
       v.parse(SyncResponseSchema, {
@@ -115,8 +108,8 @@ export function createApp() {
     )
   })
 
-  app.post('/api/sync/push', async (c) => {
-    const body = v.parse(PushRequestSchema, await c.req.json())
+  app.post('/api/sync/push', sValidator('json', PushRequestSchema), async (c) => {
+    const body = c.req.valid('json')
     const result = applyChanges(c.get('currentUserId'), body.changes, body.sinceCursor)
 
     return c.json(v.parse(SyncResponseSchema, result))

@@ -1,17 +1,13 @@
 import * as v from 'valibot'
 import { normalizeNotePath } from './files.ts'
 
-function isNormalizedNotePath(path: string): boolean {
-  return path.length > 0 && normalizeNotePath(path) === path
-}
-
 const TimestampSchema = v.pipe(v.string(), v.minLength(1))
 export const SyncCursorSchema = v.pipe(v.number(), v.integer(), v.minValue(0))
 
 export const NotePathSchema = v.pipe(
   v.string(),
   v.transform((value) => normalizeNotePath(value)),
-  v.check((value) => isNormalizedNotePath(value), 'Expected a valid note path'),
+  v.minLength(1),
 )
 
 export const ContentHashSchema = v.pipe(v.string(), v.minLength(1))

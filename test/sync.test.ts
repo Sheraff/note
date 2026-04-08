@@ -223,6 +223,32 @@ describe('server sync conflicts', () => {
     expect(third.files).toEqual([])
     expect(third.cursor).toBe(second.cursor)
   })
+
+  it('validates push request bodies before the handler runs', async () => {
+    const originalNodeEnv = process.env.NODE_ENV
+
+    try {
+      process.env.NODE_ENV = 'development'
+
+      const { createApp } = await import('../server/index.ts')
+      const response = await createApp().fetch(
+        new Request('http://localhost/api/sync/push', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Note-User': `sync-validate-${randomUUID()}`,
+          },
+          body: JSON.stringify({
+            changes: [],
+          }),
+        }),
+      )
+
+      expect(response.status).toBe(400)
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv
+    }
+  })
 })
 
 describe('client sync helpers', () => {

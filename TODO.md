@@ -31,6 +31,7 @@
 - [ ] we will need to figure out how to support images (and other attachments)
 - [ ] we fixed this already, but it still happens that the cursor gets reset to the top of the file if we're typing while syncs happen.
 - [ ] if we added a "command palette", what could we put in it? i like the idea
+- [ ] server/index should be split, so createApp is separate, and we don't need the weird `isMainModule()`
 
 
 

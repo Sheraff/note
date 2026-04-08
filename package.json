@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@hono/node-server": "1.19.12",
+    "@hono/standard-validator": "0.2.2",
     "@sso/client": "github:sheraff/sso#main&path:/client",
     "@tanstack/hotkeys": "0.7.1",
     "@vscode/codicons": "0.0.45",
