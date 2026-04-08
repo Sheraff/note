@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createApp } from '../server/app.ts'
 import type { RemoteFile } from '../server/schemas.ts'
 import { applyChanges, applyChangesToSnapshot } from '../server/sync.ts'
 import { createSyncRequester, syncNow, type FlushPendingSaveResult, type SyncContext, type SyncMode } from '../web/app/sync.ts'
@@ -230,7 +231,6 @@ describe('server sync conflicts', () => {
     try {
       process.env.NODE_ENV = 'development'
 
-      const { createApp } = await import('../server/index.ts')
       const response = await createApp().fetch(
         new Request('http://localhost/api/sync/push', {
           method: 'POST',

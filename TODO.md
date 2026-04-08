@@ -28,10 +28,11 @@
 - [x] SSO (see ~/web/foo/index.js for how to use our own internal sso, and ~/web/foo/package.json for how to install it)
 - [x] We need to make a special case for `.DS_Store` files so they are *never* synced, visible, or anything. It should behave as if those files did not even exist.
 - [x] every sync sends back at least 1 object per file that has ever existed. This can be very wasteful. The client should send some sort of "last seen at" date, and the server only responds with "changes since your last seen at date". Also, why are all files present in IndexedDB?
-- [ ] server/index should be split, so createApp is separate, and we don't need the weird `isMainModule()`
+- [x] server/index should be split, so createApp is separate, and we don't need the weird `isMainModule()`
 - [ ] we will need to figure out how to support images (and other attachments)
 - [ ] we fixed this already, but it still happens that the cursor gets reset to the top of the file if we're typing while syncs happen.
 - [ ] if we added a "command palette", what could we put in it? i like the idea
+- [ ] why is codicon.ttf getting loaded? is it only in dev mode or does it happen in prod builds too?
 
 
 

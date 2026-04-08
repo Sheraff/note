@@ -30,7 +30,7 @@ describe('server auth middleware', () => {
   it('returns the current user id for authenticated API requests', async () => {
     process.env.NODE_ENV = 'development'
 
-    const { createApp } = await import('../server/index.ts')
+    const { createApp } = await import('../server/app.ts')
     const response = await createApp().fetch(
       new Request('http://localhost/api/auth/session', {
         headers: {
@@ -51,7 +51,7 @@ describe('server auth middleware', () => {
       redirect: 'https://sso.example.test',
     })
 
-    const { createApp } = await import('../server/index.ts')
+    const { createApp } = await import('../server/app.ts')
     const response = await createApp().fetch(new Request('https://note.florianpellet.com/api/auth/session'))
 
     expect(response.status).toBe(401)
@@ -65,7 +65,7 @@ describe('server auth middleware', () => {
       user_id: 'sso-user',
     })
 
-    const { createApp } = await import('../server/index.ts')
+    const { createApp } = await import('../server/app.ts')
     const request = new Request('https://note.florianpellet.com/api/auth/session?view=full', {
       headers: {
         cookie: 'other=value; sso_session=session-token',
@@ -79,7 +79,7 @@ describe('server auth middleware', () => {
     expect(checkAuthMock).toHaveBeenCalledWith(
       'session-token',
       'note.florianpellet.com',
-      '/api/auth/session?view=full',
+      '/api/auth/session',
       request.signal,
     )
   })

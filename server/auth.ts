@@ -33,7 +33,7 @@ export async function authenticateRequest(c: Context): Promise<AuthCheck.Result[
   return ssoClient.checkAuth(
     getCookie(c, COOKIE_NAME),
     PRODUCTION_HOST,
-    request.url,
+    c.req.path,
     request.signal,
   )
 }
