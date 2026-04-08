@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { comparePaths } from './files.ts'
-import { listFiles, upsertFile } from './db.ts'
+import { getCurrentSyncCursor, getNextSyncCursor, listFiles, listFilesSinceCursor, upsertFile } from './db.ts'
 import { type RemoteFile, type SyncBaseEntry, type SyncChange, type SyncConflict } from './schemas.ts'
 
 function baseMatchesRemote(remote: RemoteFile | undefined, base: SyncBaseEntry | null): boolean {
@@ -89,10 +89,12 @@ export function applyChangesToSnapshot(currentFiles: RemoteFile[], changes: Sync
   }
 }
 
-export function applyChanges(userId: string, changes: SyncChange[]): {
+export function applyChanges(userId: string, changes: SyncChange[], sinceCursor: number): {
   files: RemoteFile[]
   conflicts: SyncConflict[]
+  cursor: number
 } {
+  const effectiveSinceCursor = Math.min(sinceCursor, getCurrentSyncCursor())
   const before = listFiles(userId)
   const next = applyChangesToSnapshot(before, changes)
   const beforeByPath = new Map(before.map((file) => [file.path, file]))
@@ -109,8 +111,12 @@ export function applyChanges(userId: string, changes: SyncChange[]): {
       continue
     }
 
-    upsertFile(userId, file)
+    upsertFile(userId, file, getNextSyncCursor())
   }
 
-  return next
+  return {
+    files: listFilesSinceCursor(userId, effectiveSinceCursor),
+    conflicts: next.conflicts,
+    cursor: getCurrentSyncCursor(),
+  }
 }

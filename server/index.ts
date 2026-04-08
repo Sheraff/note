@@ -9,14 +9,14 @@ import { Hono } from 'hono'
 import type { ViteDevServer } from 'vite'
 import * as v from 'valibot'
 import { authenticateRequest } from './auth.ts'
-import { listFiles, listManifest } from './db.ts'
+import { getCurrentSyncCursor, listFiles, listFilesSinceCursor } from './db.ts'
 import {
   AuthRedirectResponseSchema,
   HealthResponseSchema,
-  ManifestResponseSchema,
   PushRequestSchema,
   SessionResponseSchema,
   SyncResponseSchema,
+  SyncCursorSchema,
 } from './schemas.ts'
 import { applyChanges } from './sync.ts'
 
@@ -81,12 +81,24 @@ export function createApp() {
     )
   })
 
+  function parseSinceCursor(value: string | undefined): number {
+    if (value === undefined) {
+      return 0
+    }
+
+    return v.parse(SyncCursorSchema, Number(value))
+  }
+
   app.get('/api/sync/manifest', (c) => {
     const userId = c.get('currentUserId')
+    const currentCursor = getCurrentSyncCursor()
+    const sinceCursor = Math.min(parseSinceCursor(c.req.query('sinceCursor')), currentCursor)
 
     return c.json(
-      v.parse(ManifestResponseSchema, {
-        files: listManifest(userId),
+      v.parse(SyncResponseSchema, {
+        files: listFilesSinceCursor(userId, sinceCursor),
+        conflicts: [],
+        cursor: currentCursor,
       }),
     )
   })
@@ -98,13 +110,14 @@ export function createApp() {
       v.parse(SyncResponseSchema, {
         files: listFiles(userId),
         conflicts: [],
+        cursor: getCurrentSyncCursor(),
       }),
     )
   })
 
   app.post('/api/sync/push', async (c) => {
     const body = v.parse(PushRequestSchema, await c.req.json())
-    const result = applyChanges(c.get('currentUserId'), body.changes)
+    const result = applyChanges(c.get('currentUserId'), body.changes, body.sinceCursor)
 
     return c.json(v.parse(SyncResponseSchema, result))
   })

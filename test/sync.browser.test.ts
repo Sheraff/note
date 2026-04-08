@@ -8,6 +8,7 @@ type SyncSnapshotResponse = {
     path: string
     theirs: RemoteFile | null
   }>
+  cursor: number
 }
 
 type SyncRequestCounts = {
@@ -243,10 +244,57 @@ async function readOpfsFile(page: Page, path: string): Promise<string | null> {
   }, path)
 }
 
+async function readStoredSyncState(
+  page: Page,
+  userId: string,
+): Promise<{
+  files: Array<Record<string, unknown>>
+  cursor: number
+  lastSyncedAt: string | null
+} | null> {
+  return page.evaluate(async (currentUserId) => {
+    const request = indexedDB.open('note-metadata', 1)
+
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error ?? new Error('Unable to open IndexedDB'))
+    })
+
+    try {
+      const transaction = database.transaction('sync', 'readonly')
+      const store = transaction.objectStore('sync')
+      const value = await new Promise<unknown>((resolve, reject) => {
+        const getRequest = store.get(`${currentUserId}:sync-state`)
+        getRequest.onsuccess = () => resolve(getRequest.result)
+        getRequest.onerror = () => reject(getRequest.error ?? new Error('Unable to read sync state'))
+      })
+
+      if (value === undefined || value === null || typeof value !== 'object') {
+        return null
+      }
+
+      const syncState = value as {
+        files?: unknown
+        cursor?: unknown
+        lastSyncedAt?: unknown
+      }
+
+      return {
+        files: Array.isArray(syncState.files) ? syncState.files.filter((file): file is Record<string, unknown> => typeof file === 'object' && file !== null) : [],
+        cursor: typeof syncState.cursor === 'number' ? syncState.cursor : 0,
+        lastSyncedAt: typeof syncState.lastSyncedAt === 'string' ? syncState.lastSyncedAt : null,
+      }
+    } finally {
+      database.close()
+    }
+  }, userId)
+}
+
 async function createRemoteFileOnServer(request: APIRequestContext, path: string, content: string, userId?: string): Promise<void> {
   const response = await request.post('/api/sync/push', {
     ...withTestUser(userId),
     data: {
+      sinceCursor: 0,
       changes: [
         {
           kind: 'upsert',
@@ -283,6 +331,7 @@ async function updateRemoteFileOnServer(request: APIRequestContext, path: string
   const response = await request.post('/api/sync/push', {
     ...withTestUser(userId),
     data: {
+      sinceCursor: 0,
       changes: [
         {
           kind: 'upsert',
@@ -397,7 +446,7 @@ async function countSyncRequestsDuring(
   const handleRequest = (request: BrowserRequest) => {
     const url = request.url()
 
-    if (url.endsWith('/api/sync/manifest')) {
+    if (url.includes('/api/sync/manifest')) {
       counts.manifest += 1
       return
     }
@@ -464,6 +513,28 @@ test('auto-syncs exactly once after an editor save', async ({ page, request }) =
 
   expect(syncRequests).toEqual({ manifest: 0, push: 1 })
   await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe(updatedContent)
+})
+
+test('persists only sync metadata in IndexedDB, not note contents', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-metadata-${runId}`
+  const path = `sync-metadata-${runId}/metadata.md`
+  const content = '# Metadata only\n'
+
+  await setupSyncedWorkspace(page, request, [{ path, content }], userId)
+
+  const storedSyncState = await readStoredSyncState(page, userId)
+  const storedFile = storedSyncState?.files.find((file) => file.path === path)
+
+  expect(storedSyncState?.cursor ?? 0).toBeGreaterThan(0)
+  expect(storedSyncState?.lastSyncedAt).not.toBeNull()
+  expect(storedFile).toEqual({
+    path,
+    contentHash: expect.any(String),
+    updatedAt: expect.any(String),
+    deletedAt: null,
+  })
+  expect(storedFile).not.toHaveProperty('content')
 })
 
 test('keeps the Monaco cursor position stable while autosave and sync run', async ({ page, request }) => {
@@ -1411,7 +1482,7 @@ test('uses a manifest precheck when coming online clean and a full sync when loc
   await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(updatedContent)
 })
 
-test('falls through from a clean lifecycle manifest precheck to a full sync when the manifest differs', async ({ page, request }) => {
+test('pulls remote changes during a clean lifecycle precheck when the manifest differs', async ({ page, request }) => {
   const runId = randomUUID()
   const userId = `sync-lifecycle-manifest-fallback-${runId}`
   const path = `sync-lifecycle-manifest-fallback-${runId}/fallback.md`
@@ -1433,7 +1504,7 @@ test('falls through from a clean lifecycle manifest precheck to a full sync when
     })
   })
 
-  expect(syncRequests).toEqual({ manifest: 1, push: 1 })
+  expect(syncRequests).toEqual({ manifest: 1, push: 0 })
   await expect.poll(async () => await readOpfsFile(page, path)).toBe(remoteContent)
   await expectEditorToContain(page, '# Pulled after lifecycle mismatch')
 })

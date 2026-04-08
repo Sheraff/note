@@ -16,7 +16,7 @@ function areSameStoredFile(left: StoredFile | null | undefined, right: StoredFil
   return left.path === right.path && left.contentHash === right.contentHash
 }
 
-function createBaseEntry(file: RemoteFile | undefined): SyncBaseEntry | null {
+function createBaseEntry(file: ManifestEntry | undefined): SyncBaseEntry | null {
   if (file === undefined) {
     return null
   }
@@ -29,8 +29,27 @@ function createBaseEntry(file: RemoteFile | undefined): SyncBaseEntry | null {
   }
 }
 
+function toManifestEntry(file: RemoteFile): ManifestEntry {
+  return {
+    path: file.path,
+    contentHash: file.contentHash,
+    updatedAt: file.updatedAt,
+    deletedAt: file.deletedAt,
+  }
+}
+
+export function mergeRemoteFiles(previousFiles: ManifestEntry[], remoteFiles: RemoteFile[]): ManifestEntry[] {
+  const nextFilesByPath = new Map(previousFiles.map((file) => [file.path, file]))
+
+  for (const remoteFile of remoteFiles) {
+    nextFilesByPath.set(remoteFile.path, toManifestEntry(remoteFile))
+  }
+
+  return [...nextFilesByPath.values()].sort((left, right) => left.path.localeCompare(right.path))
+}
+
 export function buildLocalChanges(
-  previousRemoteFiles: RemoteFile[],
+  previousRemoteFiles: ManifestEntry[],
   localFiles: StoredFile[],
   now: string,
   skippedPaths: ReadonlySet<string> = new Set(),
@@ -75,9 +94,8 @@ export function buildLocalChanges(
   return changes
 }
 
-export async function applyRemoteSnapshot(
+export async function applyRemoteChanges(
   storage: NoteStorage,
-  previousRemoteFiles: RemoteFile[],
   remoteFiles: RemoteFile[],
   skippedPaths: ReadonlySet<string> = new Set(),
   syncStartLocalFiles?: StoredFile[],
@@ -85,38 +103,35 @@ export async function applyRemoteSnapshot(
   const currentLocalFiles = await storage.listFiles()
   const currentLocalByPath = new Map(currentLocalFiles.map((file) => [file.path, file]))
   const syncStartLocalByPath = new Map((syncStartLocalFiles ?? currentLocalFiles).map((file) => [file.path, file]))
-  const remoteByPath = new Map(remoteFiles.map((file) => [file.path, file]))
   let hasSkippedLocalChanges = false
 
-  for (const previous of previousRemoteFiles) {
-    if (previous.deletedAt !== null || skippedPaths.has(previous.path)) {
-      continue
-    }
-
-    const remote = remoteByPath.get(previous.path)
-
-    if (remote === undefined || remote.deletedAt !== null) {
-      if (!areSameStoredFile(currentLocalByPath.get(previous.path), syncStartLocalByPath.get(previous.path))) {
-        hasSkippedLocalChanges = true
-        continue
-      }
-
-      await storage.deleteEntry(previous.path)
-    }
-  }
-
   for (const remote of remoteFiles) {
-    if (remote.deletedAt !== null || remote.content === null || skippedPaths.has(remote.path)) {
+    if (skippedPaths.has(remote.path)) {
       continue
     }
 
     const local = currentLocalByPath.get(remote.path)
+    const syncStartLocal = syncStartLocalByPath.get(remote.path)
+
+    if (remote.deletedAt !== null) {
+      if (!areSameStoredFile(local, syncStartLocal)) {
+        hasSkippedLocalChanges = true
+        continue
+      }
+
+      await storage.deleteEntry(remote.path)
+      continue
+    }
+
+    if (remote.content === null) {
+      continue
+    }
 
     if (local?.contentHash === remote.contentHash) {
       continue
     }
 
-    if (!areSameStoredFile(local, syncStartLocalByPath.get(remote.path))) {
+    if (!areSameStoredFile(local, syncStartLocal)) {
       hasSkippedLocalChanges = true
       continue
     }
@@ -147,22 +162,29 @@ export function resolveSyncConflicts(conflicts: SyncConflict[]): SyncConflictDet
   }))
 }
 
-export function doesManifestMatchSyncState(manifestFiles: ManifestEntry[], syncFiles: RemoteFile[]): boolean {
-  if (manifestFiles.length !== syncFiles.length) {
-    return false
+export async function pullRemoteChanges(options: {
+  api: ReturnType<typeof createApiClient>
+  blockedPaths?: ReadonlySet<string>
+  previousState: SyncState
+  storage: NoteStorage
+}): Promise<{
+  syncState: SyncState
+  hasSkippedLocalChanges: boolean
+  receivedRemoteChanges: boolean
+}> {
+  const localFiles = await options.storage.listFiles()
+  const response = await options.api.getRemoteChanges(options.previousState.cursor)
+  const snapshotResult = await applyRemoteChanges(options.storage, response.files, options.blockedPaths, localFiles)
+
+  return {
+    syncState: {
+      files: mergeRemoteFiles(options.previousState.files, response.files),
+      cursor: response.cursor,
+      lastSyncedAt: new Date().toISOString(),
+    },
+    hasSkippedLocalChanges: snapshotResult.hasSkippedLocalChanges,
+    receivedRemoteChanges: response.files.length > 0,
   }
-
-  return manifestFiles.every((manifestFile, index) => {
-    const syncFile = syncFiles[index]
-
-    return (
-      syncFile !== undefined &&
-      manifestFile.path === syncFile.path &&
-      manifestFile.contentHash === syncFile.contentHash &&
-      manifestFile.updatedAt === syncFile.updatedAt &&
-      manifestFile.deletedAt === syncFile.deletedAt
-    )
-  })
 }
 
 export async function syncWithServer(options: {
@@ -178,11 +200,13 @@ export async function syncWithServer(options: {
   const now = new Date().toISOString()
   const localFiles = await options.storage.listFiles()
   const changes = buildLocalChanges(options.previousState.files, localFiles, now, options.blockedPaths)
-  const response = await options.api.pushChanges({ changes })
+  const response = await options.api.pushChanges({
+    sinceCursor: options.previousState.cursor,
+    changes,
+  })
   const conflicts = resolveSyncConflicts(response.conflicts)
-  const snapshotResult = await applyRemoteSnapshot(
+  const snapshotResult = await applyRemoteChanges(
     options.storage,
-    options.previousState.files,
     response.files,
     new Set(conflicts.map((conflict) => conflict.path)),
     localFiles,
@@ -190,7 +214,8 @@ export async function syncWithServer(options: {
 
   return {
     syncState: {
-      files: response.files,
+      files: mergeRemoteFiles(options.previousState.files, response.files),
+      cursor: response.cursor,
       lastSyncedAt: new Date().toISOString(),
     },
     conflicts,

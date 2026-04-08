@@ -524,6 +524,7 @@ describeStorageContract('opfs storage backend', createOpfsStorageHarness)
 describe('workspace storage bootstrap', () => {
   const syncState: SyncState = {
     files: [],
+    cursor: 0,
     lastSyncedAt: null,
   }
 

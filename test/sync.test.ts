@@ -1,8 +1,9 @@
+import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RemoteFile } from '../server/schemas.ts'
-import { applyChangesToSnapshot } from '../server/sync.ts'
+import { applyChanges, applyChangesToSnapshot } from '../server/sync.ts'
 import { createSyncRequester, syncNow, type FlushPendingSaveResult, type SyncContext, type SyncMode } from '../web/app/sync.ts'
-import { applyRemoteSnapshot, buildLocalChanges } from '../web/notes/sync.ts'
+import { applyRemoteChanges, buildLocalChanges } from '../web/notes/sync.ts'
 import { hashContent } from '../web/notes/hashes.ts'
 import type { SyncState } from '../web/schemas.ts'
 import type { NoteStorage, StoredFile } from '../web/storage/types.ts'
@@ -84,6 +85,15 @@ async function createRemoteFile(path: string, content: string, updatedAt: string
     contentHash: await hashContent(content),
     updatedAt,
     deletedAt: null,
+  }
+}
+
+function createManifestEntry(file: RemoteFile) {
+  return {
+    path: file.path,
+    contentHash: file.contentHash,
+    updatedAt: file.updatedAt,
+    deletedAt: file.deletedAt,
   }
 }
 
@@ -177,6 +187,42 @@ describe('server sync conflicts', () => {
     expect(next.files).toEqual(remoteBefore)
     expect(next.conflicts).toEqual([])
   })
+
+  it('returns only files changed since the provided cursor', async () => {
+    const userId = `sync-delta-${randomUUID()}`
+    const firstContent = 'first file'
+    const secondContent = 'second file'
+
+    const first = applyChanges(userId, [
+      {
+        kind: 'upsert',
+        path: 'notes/first.md',
+        content: firstContent,
+        updatedAt: '2026-04-03T10:00:00.000Z',
+        base: null,
+      },
+    ], 0)
+
+    expect(first.files.map((file) => file.path)).toEqual(['notes/first.md'])
+
+    const second = applyChanges(userId, [
+      {
+        kind: 'upsert',
+        path: 'notes/second.md',
+        content: secondContent,
+        updatedAt: '2026-04-03T11:00:00.000Z',
+        base: null,
+      },
+    ], first.cursor)
+
+    expect(second.files.map((file) => file.path)).toEqual(['notes/second.md'])
+    expect(second.cursor).toBeGreaterThan(first.cursor)
+
+    const third = applyChanges(userId, [], second.cursor)
+
+    expect(third.files).toEqual([])
+    expect(third.cursor).toBe(second.cursor)
+  })
 })
 
 describe('client sync helpers', () => {
@@ -220,9 +266,8 @@ describe('client sync helpers', () => {
       await createStoredFile('notes/remove.md', 'remove me', '2026-04-03T12:00:00.000Z'),
     ]
     const storage = createMemoryStorage(localFiles)
-    const previousRemoteFiles = [await createRemoteFile('notes/remove.md', 'remove me', '2026-04-03T10:00:00.000Z')]
 
-    await applyRemoteSnapshot(storage, previousRemoteFiles, [
+    await applyRemoteChanges(storage, [
       {
         path: 'notes/remove.md',
         content: null,
@@ -241,10 +286,9 @@ describe('client sync helpers', () => {
     const syncedLocalFile = await createStoredFile(path, 'first saved draft', '2026-04-03T11:00:00.000Z')
     const newerLocalFile = await createStoredFile(path, 'newer local draft', '2026-04-03T12:00:00.000Z')
     const storage = createMemoryStorage([newerLocalFile])
-    const previousRemoteFiles = [await createRemoteFile(path, 'base remote version', '2026-04-03T10:00:00.000Z')]
     const remoteFiles = [await createRemoteFile(path, 'first saved draft', '2026-04-03T11:00:00.000Z')]
 
-    const result = await applyRemoteSnapshot(storage, previousRemoteFiles, remoteFiles, new Set(), [syncedLocalFile])
+    const result = await applyRemoteChanges(storage, remoteFiles, new Set(), [syncedLocalFile])
 
     expect(result).toEqual({ hasSkippedLocalChanges: true })
     expect((await storage.readTextFile(path))?.content).toBe('newer local draft')
@@ -291,7 +335,8 @@ describe('client sync helpers', () => {
     const remoteFile = await createRemoteFile('notes/today.md', 'same', '2026-04-03T10:00:00.000Z')
     const storage = createMemoryStorage([await createStoredFile('notes/today.md', 'same', '2026-04-03T10:00:00.000Z')])
     const syncState: SyncState = {
-      files: [remoteFile],
+      files: [createManifestEntry(remoteFile)],
+      cursor: 1,
       lastSyncedAt: null,
     }
     const context = createSyncContext({
@@ -300,18 +345,12 @@ describe('client sync helpers', () => {
       syncState,
     })
     const fetchMock = vi.fn(async (input: string) => {
-      expect(input).toBe('/api/sync/manifest')
+      expect(input).toBe('/api/sync/manifest?sinceCursor=1')
 
       return createJsonResponse({
-        files: [
-          {
-            path: remoteFile.path,
-            contentHash: remoteFile.contentHash,
-            updatedAt: remoteFile.updatedAt,
-            deletedAt: remoteFile.deletedAt,
-          },
-        ],
+        files: [],
         conflicts: [],
+        cursor: 1,
       })
     })
 
@@ -324,17 +363,19 @@ describe('client sync helpers', () => {
     expect(context.refreshWorkspace).not.toHaveBeenCalled()
     expect(context.setHasKnownLocalChangesSinceSync).not.toHaveBeenCalled()
     expect(context.setSyncState).toHaveBeenCalledWith({
-      files: [remoteFile],
+      files: [createManifestEntry(remoteFile)],
+      cursor: 1,
       lastSyncedAt: expect.any(String),
     })
   })
 
-  it('falls back to a full sync when the manifest differs', async () => {
+  it('applies remote changes during a clean precheck pull', async () => {
     const previousRemoteFile = await createRemoteFile('notes/today.md', 'before', '2026-04-03T10:00:00.000Z')
     const nextRemoteFile = await createRemoteFile('notes/today.md', 'after', '2026-04-03T11:00:00.000Z')
     const storage = createMemoryStorage([await createStoredFile('notes/today.md', 'before', '2026-04-03T10:00:00.000Z')])
     const syncState: SyncState = {
-      files: [previousRemoteFile],
+      files: [createManifestEntry(previousRemoteFile)],
+      cursor: 1,
       lastSyncedAt: null,
     }
     const context = createSyncContext({
@@ -343,25 +384,13 @@ describe('client sync helpers', () => {
       syncState,
     })
     const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
-      if (input === '/api/sync/manifest') {
-        return createJsonResponse({
-          files: [
-            {
-              path: nextRemoteFile.path,
-              contentHash: nextRemoteFile.contentHash,
-              updatedAt: nextRemoteFile.updatedAt,
-              deletedAt: nextRemoteFile.deletedAt,
-            },
-          ],
-        })
-      }
-
-      expect(input).toBe('/api/sync/push')
-      expect(init?.method).toBe('POST')
+      expect(init).toBeUndefined()
+      expect(input).toBe('/api/sync/manifest?sinceCursor=1')
 
       return createJsonResponse({
         files: [nextRemoteFile],
         conflicts: [],
+        cursor: 2,
       })
     })
 
@@ -369,7 +398,7 @@ describe('client sync helpers', () => {
 
     await syncNow(context, { mode: 'precheck-if-clean' })
 
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(context.refreshWorkspace).toHaveBeenCalledWith('notes/today.md')
     expect(context.setHasKnownLocalChangesSinceSync).toHaveBeenCalledWith(false)
     expect((await storage.readTextFile('notes/today.md'))?.content).toBe('after')
@@ -379,7 +408,8 @@ describe('client sync helpers', () => {
     const remoteFile = await createRemoteFile('notes/today.md', 'same', '2026-04-03T10:00:00.000Z')
     const storage = createMemoryStorage([await createStoredFile('notes/today.md', 'same', '2026-04-03T10:00:00.000Z')])
     const syncState: SyncState = {
-      files: [remoteFile],
+      files: [createManifestEntry(remoteFile)],
+      cursor: 1,
       lastSyncedAt: null,
     }
     const context = createSyncContext({
@@ -394,6 +424,7 @@ describe('client sync helpers', () => {
       return createJsonResponse({
         files: [remoteFile],
         conflicts: [],
+        cursor: 2,
       })
     })
 
@@ -410,7 +441,8 @@ describe('client sync helpers', () => {
     const mineFile = await createStoredFile('notes/today.md', 'local version', '2026-04-03T11:00:00.000Z')
     const storage = createMemoryStorage([mineFile])
     const syncState: SyncState = {
-      files: [previousRemoteFile],
+      files: [createManifestEntry(previousRemoteFile)],
+      cursor: 1,
       lastSyncedAt: null,
     }
     const context = createSyncContext({
@@ -429,6 +461,7 @@ describe('client sync helpers', () => {
             theirs: previousRemoteFile,
           },
         ],
+        cursor: 1,
       })
     })
 
@@ -460,7 +493,8 @@ describe('client sync helpers', () => {
     const firstSavedLocalFile = await createStoredFile(path, 'first saved draft', '2026-04-03T11:00:00.000Z')
     const storage = createMemoryStorage([firstSavedLocalFile])
     const syncState: SyncState = {
-      files: [previousRemoteFile],
+      files: [createManifestEntry(previousRemoteFile)],
+      cursor: 1,
       lastSyncedAt: null,
     }
     const context = createSyncContext({
@@ -476,6 +510,7 @@ describe('client sync helpers', () => {
       return createJsonResponse({
         files: [await createRemoteFile(path, 'first saved draft', '2026-04-03T11:00:00.000Z')],
         conflicts: [],
+        cursor: 2,
       })
     })
 
@@ -495,7 +530,8 @@ describe('client sync helpers', () => {
     const localSecond = await createStoredFile('notes/second.md', 'local second', '2026-04-03T11:00:00.000Z')
     const storage = createMemoryStorage([localFirst, localSecond])
     const syncState: SyncState = {
-      files: [remoteFirst, remoteSecond],
+      files: [createManifestEntry(remoteFirst), createManifestEntry(remoteSecond)],
+      cursor: 2,
       lastSyncedAt: null,
     }
     const context = createSyncContext({
@@ -522,6 +558,7 @@ describe('client sync helpers', () => {
           remoteSecond,
         ],
         conflicts: [],
+        cursor: 3,
       })
     })
 

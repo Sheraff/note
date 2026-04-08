@@ -1,5 +1,5 @@
 import * as v from 'valibot'
-import { NotePathSchema, RemoteFileSchema } from '../server/schemas.ts'
+import { ManifestEntrySchema, NotePathSchema, SyncCursorSchema } from '../server/schemas.ts'
 
 function isDirectoryHandle(input: unknown): input is FileSystemDirectoryHandle {
   return (
@@ -28,7 +28,8 @@ export const AppSettingsSchema = v.object({
 })
 
 export const SyncStateSchema = v.object({
-  files: v.array(RemoteFileSchema),
+  files: v.array(ManifestEntrySchema),
+  cursor: SyncCursorSchema,
   lastSyncedAt: v.nullable(v.string()),
 })
 
@@ -49,5 +50,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 
 export const DEFAULT_SYNC_STATE: SyncState = {
   files: [],
+  cursor: 0,
   lastSyncedAt: null,
 }

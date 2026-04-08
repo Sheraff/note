@@ -2,7 +2,6 @@ import * as v from 'valibot'
 import {
   AuthRedirectResponseSchema,
   HealthResponseSchema,
-  ManifestResponseSchema,
   PushRequestSchema,
   SessionResponseSchema,
   SyncResponseSchema,
@@ -65,8 +64,8 @@ export function createApiClient(baseUrl = '') {
     async getSnapshot() {
       return parseJsonResponse(await fetch(`${baseUrl}/api/sync/snapshot`), SyncResponseSchema)
     },
-    async getManifest() {
-      return parseJsonResponse(await fetch(`${baseUrl}/api/sync/manifest`), ManifestResponseSchema)
+    async getRemoteChanges(sinceCursor: number) {
+      return parseJsonResponse(await fetch(`${baseUrl}/api/sync/manifest?sinceCursor=${sinceCursor}`), SyncResponseSchema)
     },
     async pushChanges(payload: PushRequest) {
       const body = v.parse(PushRequestSchema, payload)

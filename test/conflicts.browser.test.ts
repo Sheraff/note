@@ -8,6 +8,7 @@ type SyncSnapshotResponse = {
     path: string
     theirs: RemoteFile | null
   }>
+  cursor: number
 }
 
 const TEST_USER_HEADER = 'X-Note-User'
@@ -143,6 +144,7 @@ async function pushRemoteFile(request: APIRequestContext, path: string, content:
   const response = await request.post('/api/sync/push', {
     ...withTestUser(userId),
     data: {
+      sinceCursor: 0,
       changes: [
         {
           kind: 'upsert',
@@ -162,6 +164,7 @@ async function createRemoteFileOnServer(request: APIRequestContext, path: string
   const response = await request.post('/api/sync/push', {
     ...withTestUser(userId),
     data: {
+      sinceCursor: 0,
       changes: [
         {
           kind: 'upsert',
@@ -185,6 +188,7 @@ async function pushRemoteDelete(request: APIRequestContext, path: string, userId
   const response = await request.post('/api/sync/push', {
     ...withTestUser(userId),
     data: {
+      sinceCursor: 0,
       changes: [
         {
           kind: 'delete',
@@ -211,7 +215,7 @@ async function countSyncRequestsDuring(page: Page, action: () => Promise<void>):
   const handleRequest = (request: BrowserRequest) => {
     const url = request.url()
 
-    if (url.endsWith('/api/sync/manifest') || url.endsWith('/api/sync/push')) {
+    if (url.includes('/api/sync/manifest') || url.endsWith('/api/sync/push')) {
       requestCount += 1
     }
   }

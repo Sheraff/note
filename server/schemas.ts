@@ -6,6 +6,7 @@ function isNormalizedNotePath(path: string): boolean {
 }
 
 const TimestampSchema = v.pipe(v.string(), v.minLength(1))
+export const SyncCursorSchema = v.pipe(v.number(), v.integer(), v.minValue(0))
 
 export const NotePathSchema = v.pipe(
   v.string(),
@@ -55,6 +56,7 @@ export const DeleteChangeSchema = v.object({
 export const SyncChangeSchema = v.variant('kind', [UpsertChangeSchema, DeleteChangeSchema])
 
 export const PushRequestSchema = v.object({
+  sinceCursor: SyncCursorSchema,
   changes: v.array(SyncChangeSchema),
 })
 
@@ -75,13 +77,10 @@ export const AuthRedirectResponseSchema = v.object({
   redirect: v.string(),
 })
 
-export const ManifestResponseSchema = v.object({
-  files: v.array(ManifestEntrySchema),
-})
-
 export const SyncResponseSchema = v.object({
   files: v.array(RemoteFileSchema),
   conflicts: v.array(SyncConflictSchema),
+  cursor: SyncCursorSchema,
 })
 
 export type SyncBaseEntry = v.InferOutput<typeof SyncBaseEntrySchema>

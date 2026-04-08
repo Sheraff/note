@@ -147,7 +147,12 @@ export async function getSyncState(userId: string): Promise<SyncState> {
     return DEFAULT_SYNC_STATE
   }
 
-  return v.parse(SyncStateSchema, value)
+  const partialSyncState = value !== null && typeof value === 'object' ? value as Record<string, unknown> : {}
+
+  return v.parse(SyncStateSchema, {
+    ...DEFAULT_SYNC_STATE,
+    ...partialSyncState,
+  })
 }
 
 export async function setSyncState(userId: string, syncState: SyncState): Promise<void> {

@@ -119,7 +119,7 @@ function App() {
   const [currentPath, setCurrentPath] = createSignal<string | null>(null)
   const [draftContent, setDraftContent] = createSignal('')
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
-  const [syncState, setSyncStateSignal] = createSignal<SyncState>({ files: [], lastSyncedAt: null })
+  const [syncState, setSyncStateSignal] = createSignal<SyncState>(DEFAULT_SYNC_STATE)
   const [isSyncing, setIsSyncing] = createSignal(false)
   const [loadedFileSnapshot, setLoadedFileSnapshot] = createSignal<StoredFile | null>(null)
   const [noteConflictSignal, setNoteConflictSignal] = createSignal<NoteConflict | null>(null)

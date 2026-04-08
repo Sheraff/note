@@ -1,7 +1,7 @@
 import { createApiClient } from '#web/api.ts'
 import type { NoteConflict, SaveCurrentNoteResult } from './notes.ts'
 import type { SyncState } from '#web/schemas.ts'
-import { doesManifestMatchSyncState, syncWithServer } from '#web/notes/sync.ts'
+import { pullRemoteChanges, syncWithServer } from '#web/notes/sync.ts'
 import { setSyncState } from '#web/storage/metadata.ts'
 import type { NoteStorage, StoredFile } from '#web/storage/types.ts'
 
@@ -130,6 +130,37 @@ async function runFullSync(context: SyncContext, storage: NoteStorage): Promise<
   }
 }
 
+async function runRemotePull(context: SyncContext, storage: NoteStorage): Promise<{ syncState: SyncState }> {
+  const blockedPaths = new Set(context.blockedSyncPaths())
+  const result = await pullRemoteChanges({
+    api,
+    blockedPaths,
+    previousState: context.syncState(),
+    storage,
+  })
+
+  await persistSyncState(context, result.syncState)
+
+  if (blockedPaths.size === 0) {
+    context.setQueuedNoteConflicts([])
+    context.setNoteConflict(null)
+
+    if (result.receivedRemoteChanges || result.hasSkippedLocalChanges) {
+      context.setHasKnownLocalChangesSinceSync(result.hasSkippedLocalChanges)
+    }
+  } else {
+    context.setHasKnownLocalChangesSinceSync(true)
+  }
+
+  if (result.receivedRemoteChanges) {
+    await context.refreshWorkspace(context.currentPath())
+  }
+
+  return {
+    syncState: result.syncState,
+  }
+}
+
 export function createSyncRequester(options: {
   onError(error: unknown): void
   runSync(options: { mode: SyncMode; skipPendingSave: boolean }): Promise<void>
@@ -194,16 +225,8 @@ export async function syncNow(context: SyncContext, options: SyncRequestOptions 
     }
 
     if (mode === 'precheck-if-clean' && !context.hasKnownLocalChangesSinceSync()) {
-      const manifest = await api.getManifest()
-
-      if (doesManifestMatchSyncState(manifest.files, context.syncState().files)) {
-        await persistSyncState(context, {
-          ...context.syncState(),
-          lastSyncedAt: new Date().toISOString(),
-        })
-        context.setNoteConflict(null)
-        return
-      }
+      await runRemotePull(context, currentStorage)
+      return
     }
 
     await runFullSync(context, currentStorage)
