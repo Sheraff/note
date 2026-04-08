@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createSignal, onMount } from 'solid-js'
 import type { TreeNode } from '#web/notes/tree.ts'
+import type { ListedEntry } from '#web/storage/types.ts'
 import { ConflictActions, type ConflictActionLabels } from './ConflictActions.tsx'
 import { Codicon } from './Codicon.tsx'
 import './FileTree.css'
@@ -203,7 +204,7 @@ function FileNodeRow(props: {
   conflict: { labels: ConflictActionLabels; path: string } | null
   conflictPaths: string[]
   currentPath: string | null
-  draggedFilePath: string | null
+  draggedEntry: ListedEntry | null
   node: TreeNode
   unsavedPath: string | null
   onAcceptTheirs(): void
@@ -215,8 +216,8 @@ function FileNodeRow(props: {
   onResolveInDiff(): void
   onSaveMine(): void
   onSaveMineSeparately(): void
-  onStartPointerDrag(path: string, pointerId: number, clientX: number, clientY: number): void
-  onStartDrag(path: string): void
+  onStartPointerDrag(entry: ListedEntry, pointerId: number, clientX: number, clientY: number): void
+  onStartDrag(entry: ListedEntry): void
   onStartRename(path: string, kind: TreeNode['kind'], name: string): void
 }) {
   const hasConflict = () => hasConflictPath(props.conflict, props.conflictPaths, props.node.path)
@@ -238,7 +239,7 @@ function FileNodeRow(props: {
       <button
         classList={{
           'tree-entry': true,
-          'tree-entry-dragging': props.draggedFilePath === props.node.path,
+          'tree-entry-dragging': props.draggedEntry?.path === props.node.path,
           'tree-entry-has-conflict': hasConflict(),
           'tree-entry-conflict': hasActiveConflict(),
           'tree-entry-unsaved': hasUnsavedChanges(),
@@ -251,7 +252,7 @@ function FileNodeRow(props: {
             return
           }
 
-          props.onStartPointerDrag(props.node.path, event.pointerId, event.clientX, event.clientY)
+          props.onStartPointerDrag({ kind: props.node.kind, path: props.node.path }, event.pointerId, event.clientX, event.clientY)
         }}
         onDragStart={(event) => {
           const dataTransfer = event.dataTransfer ?? null
@@ -262,7 +263,7 @@ function FileNodeRow(props: {
             dataTransfer.effectAllowed = 'move'
           }
 
-          props.onStartDrag(props.node.path)
+          props.onStartDrag({ kind: props.node.kind, path: props.node.path })
         }}
         onDragEnd={() => {
           props.onEndDrag()
@@ -357,7 +358,7 @@ function DirectoryNode(props: {
   conflict: { labels: ConflictActionLabels; path: string } | null
   conflictPaths: string[]
   currentPath: string | null
-  draggedFilePath: string | null
+  draggedEntry: ListedEntry | null
   dropTarget: MoveDropTarget | null
   isDirectoryOpen(path: string): boolean
   node: TreeNode
@@ -365,6 +366,7 @@ function DirectoryNode(props: {
   pendingCreation: PendingCreation | null
   pendingRename: PendingRename | null
   onAcceptTheirs(): void
+  canDropInDirectory(path: string): boolean
   onCancelAction(): void
   onClearMoveDropTarget(): void
   onCreateFolder(path: string): void
@@ -379,8 +381,8 @@ function DirectoryNode(props: {
   onResolveInDiff(): void
   onSaveMine(): void
   onSaveMineSeparately(): void
-  onStartPointerDrag(path: string, pointerId: number, clientX: number, clientY: number): void
-  onStartDrag(path: string): void
+  onStartPointerDrag(entry: ListedEntry, pointerId: number, clientX: number, clientY: number): void
+  onStartDrag(entry: ListedEntry): void
   onStartRename(path: string, kind: TreeNode['kind'], name: string): void
   onSubmitCreation(name: string, submitSource: EntryEditorSubmitSource): Promise<string | null>
   onSubmitRename(name: string): Promise<string | null>
@@ -398,12 +400,34 @@ function DirectoryNode(props: {
             <button
               classList={{
                 'tree-entry': true,
+                'tree-entry-dragging': props.draggedEntry?.path === props.node.path,
                 'tree-entry-descendant-conflict': hasClosedDescendantConflict(),
                 'tree-entry-drop-target': props.dropTarget?.kind === 'directory' && props.dropTarget.path === props.node.path,
                 'tree-entry-has-conflict': hasClosedDescendantConflict(),
               }}
               type="button"
               aria-expanded={isOpen() ? 'true' : 'false'}
+              onPointerDown={(event) => {
+                if (event.button !== 0) {
+                  return
+                }
+
+                props.onStartPointerDrag({ kind: props.node.kind, path: props.node.path }, event.pointerId, event.clientX, event.clientY)
+              }}
+              onDragStart={(event) => {
+                const dataTransfer = event.dataTransfer ?? null
+
+                dataTransfer?.setData('text/plain', props.node.path)
+
+                if (dataTransfer !== null) {
+                  dataTransfer.effectAllowed = 'move'
+                }
+
+                props.onStartDrag({ kind: props.node.kind, path: props.node.path })
+              }}
+              onDragEnd={() => {
+                props.onEndDrag()
+              }}
               onClick={() => {
                 props.onSetDirectoryOpen(props.node.path, !isOpen())
               }}
@@ -475,7 +499,7 @@ function DirectoryNode(props: {
           conflict={props.conflict}
           conflictPaths={props.conflictPaths}
           currentPath={props.currentPath}
-          draggedFilePath={props.draggedFilePath}
+          draggedEntry={props.draggedEntry}
           dropTarget={props.dropTarget}
           isDirectoryOpen={props.isDirectoryOpen}
           parentPath={props.node.path}
@@ -483,6 +507,7 @@ function DirectoryNode(props: {
           onSetDirectoryOpen={props.onSetDirectoryOpen}
           unsavedPath={props.unsavedPath}
           onAcceptTheirs={props.onAcceptTheirs}
+          canDropInDirectory={props.canDropInDirectory}
           pendingCreation={props.pendingCreation}
           pendingRename={props.pendingRename}
           onCancelAction={props.onCancelAction}
@@ -513,7 +538,7 @@ export function FileTree(props: {
   conflict: { labels: ConflictActionLabels; path: string } | null
   conflictPaths: string[]
   currentPath: string | null
-  draggedFilePath: string | null
+  draggedEntry: ListedEntry | null
   dropTarget: MoveDropTarget | null
   isDirectoryOpen(path: string): boolean
   parentPath: string | null
@@ -521,6 +546,7 @@ export function FileTree(props: {
   onSetDirectoryOpen(path: string, isOpen: boolean): void
   unsavedPath: string | null
   onAcceptTheirs(): void
+  canDropInDirectory(path: string): boolean
   pendingCreation: PendingCreation | null
   pendingRename: PendingRename | null
   onCancelAction(): void
@@ -536,8 +562,8 @@ export function FileTree(props: {
   onResolveInDiff(): void
   onSaveMine(): void
   onSaveMineSeparately(): void
-  onStartPointerDrag(path: string, pointerId: number, clientX: number, clientY: number): void
-  onStartDrag(path: string): void
+  onStartPointerDrag(entry: ListedEntry, pointerId: number, clientX: number, clientY: number): void
+  onStartDrag(entry: ListedEntry): void
   onStartRename(path: string, kind: TreeNode['kind'], name: string): void
   onSubmitCreation(name: string, submitSource: EntryEditorSubmitSource): Promise<string | null>
   onSubmitRename(name: string): Promise<string | null>
@@ -569,7 +595,7 @@ export function FileTree(props: {
             <li
               data-tree-directory-drop-path={currentNode().kind === 'directory' ? currentNode().path : undefined}
               onDragOver={(event) => {
-                if (currentNode().kind !== 'directory' || props.draggedFilePath === null) {
+                if (currentNode().kind !== 'directory' || props.draggedEntry === null || !props.canDropInDirectory(currentNode().path)) {
                   return
                 }
 
@@ -595,7 +621,7 @@ export function FileTree(props: {
                 props.onDragOverDirectory(currentNode().path)
               }}
               onDrop={(event) => {
-                if (currentNode().kind !== 'directory' || props.draggedFilePath === null) {
+                if (currentNode().kind !== 'directory' || props.draggedEntry === null || !props.canDropInDirectory(currentNode().path)) {
                   return
                 }
 
@@ -615,18 +641,19 @@ export function FileTree(props: {
               }}
             >
               {currentNode().kind === 'directory' ? (
-                <DirectoryNode
-                  conflict={props.conflict}
-                  conflictPaths={props.conflictPaths}
-                  currentPath={props.currentPath}
-                  draggedFilePath={props.draggedFilePath}
-                  dropTarget={props.dropTarget}
-                  isDirectoryOpen={props.isDirectoryOpen}
-                  node={currentNode()}
-                  unsavedPath={props.unsavedPath}
-                  onAcceptTheirs={props.onAcceptTheirs}
-                  pendingCreation={props.pendingCreation}
-                  pendingRename={props.pendingRename}
+                    <DirectoryNode
+                      conflict={props.conflict}
+                      conflictPaths={props.conflictPaths}
+                      currentPath={props.currentPath}
+                      draggedEntry={props.draggedEntry}
+                      dropTarget={props.dropTarget}
+                      isDirectoryOpen={props.isDirectoryOpen}
+                      node={currentNode()}
+                      unsavedPath={props.unsavedPath}
+                      onAcceptTheirs={props.onAcceptTheirs}
+                      canDropInDirectory={props.canDropInDirectory}
+                      pendingCreation={props.pendingCreation}
+                      pendingRename={props.pendingRename}
                   onCancelAction={props.onCancelAction}
                   onClearMoveDropTarget={props.onClearMoveDropTarget}
                   onCreateFolder={props.onCreateFolder}
@@ -656,7 +683,7 @@ export function FileTree(props: {
                       conflict={props.conflict}
                       conflictPaths={props.conflictPaths}
                       currentPath={props.currentPath}
-                      draggedFilePath={props.draggedFilePath}
+                      draggedEntry={props.draggedEntry}
                       node={currentNode()}
                       unsavedPath={props.unsavedPath}
                       onAcceptTheirs={props.onAcceptTheirs}

@@ -1,11 +1,19 @@
 import { createHotkeyHandler } from '@tanstack/hotkeys'
 import { Show, createEffect, createSignal, onCleanup } from 'solid-js'
-import { getName, getParentPath } from '../notes/paths.ts'
+import { getName, getParentPath, joinNotePath } from '../notes/paths.ts'
 import type { TreeNode } from '../notes/tree.ts'
+import type { ListedEntry } from '../storage/types.ts'
 import { Codicon } from './Codicon.tsx'
 import { type ConflictActionLabels } from './ConflictActions.tsx'
 import { FileTree, type EntryEditorSubmitSource, type MoveDropTarget, type PendingCreation, type PendingRename } from './FileTree.tsx'
 import './NotesSidebar.css'
+
+type DirectoryMoveState = {
+  fromPath: string
+  isOpen: boolean
+  openByPath: Map<string, boolean>
+  toPath: string
+}
 
 export function NotesSidebar(props: {
   conflict: {
@@ -23,7 +31,7 @@ export function NotesSidebar(props: {
   onCreateFolder(parentPath: string | null, name: string): Promise<string | null>
   onCreateNote(parentPath: string | null, name: string, submitSource: EntryEditorSubmitSource): Promise<string | null>
   onDeleteEntry(path: string, kind: TreeNode['kind']): void
-  onMoveEntry(path: string, parentPath: string | null): void
+  onMoveEntry(entry: ListedEntry, parentPath: string | null): Promise<boolean>
   onOpen(path: string): void
   onOpenConflict(path: string): void
   onRenameEntry(path: string, kind: TreeNode['kind'], name: string): Promise<string | null>
@@ -34,7 +42,7 @@ export function NotesSidebar(props: {
   const [pendingCreation, setPendingCreation] = createSignal<PendingCreation | null>(null)
   const [pendingRename, setPendingRename] = createSignal<PendingRename | null>(null)
   const [directoryOpenByPath, setDirectoryOpenByPath] = createSignal(new Map<string, boolean>())
-  const [draggedFilePath, setDraggedFilePath] = createSignal<string | null>(null)
+  const [draggedEntry, setDraggedEntry] = createSignal<ListedEntry | null>(null)
   const [dropTarget, setDropTarget] = createSignal<MoveDropTarget | null>(null)
   const [dragPreviewPosition, setDragPreviewPosition] = createSignal<{ x: number; y: number } | null>(null)
   let suppressTreeClickCleanup: (() => void) | null = null
@@ -42,7 +50,7 @@ export function NotesSidebar(props: {
     | {
         clientX: number
         clientY: number
-        path: string
+        entry: ListedEntry
         pointerId: number
         started: boolean
       }
@@ -50,7 +58,7 @@ export function NotesSidebar(props: {
   let hoverOpenPath: string | null = null
   let hoverOpenTimeout: number | undefined
 
-  function openDirectoryChain(path: string) {
+  function openDirectoryChain(path: string, respectExplicitClosed = false) {
     const directoryPaths: string[] = []
     let currentPath: string | null = path
 
@@ -60,9 +68,19 @@ export function NotesSidebar(props: {
     }
 
     setDirectoryOpenByPath((current) => {
+      let blockedPath: string | null = null
       let next: Map<string, boolean> | null = null
 
       for (const directoryPath of directoryPaths) {
+        if (blockedPath !== null && directoryPath.startsWith(`${blockedPath}/`)) {
+          continue
+        }
+
+        if (respectExplicitClosed && current.get(directoryPath) === false) {
+          blockedPath = directoryPath
+          continue
+        }
+
         if (current.get(directoryPath) === true) {
           continue
         }
@@ -110,7 +128,7 @@ export function NotesSidebar(props: {
     const parentPath = getParentPath(path)
 
     if (parentPath !== null) {
-      openDirectoryChain(parentPath)
+      openDirectoryChain(parentPath, true)
     }
   })
 
@@ -129,10 +147,113 @@ export function NotesSidebar(props: {
   }
 
   function clearDragState() {
-    setDraggedFilePath(null)
+    setDraggedEntry(null)
     setDragPreviewPosition(null)
     setDropTarget(null)
     clearHoverOpenTimer()
+  }
+
+  function canDropInDirectory(entry: ListedEntry, path: string): boolean {
+    if (entry.kind !== 'directory') {
+      return true
+    }
+
+    return path !== entry.path && !path.startsWith(`${entry.path}/`)
+  }
+
+  function captureDirectoryMoveState(path: string, parentPath: string | null): DirectoryMoveState | null {
+    const toPath = joinNotePath(parentPath, getName(path))
+
+    if (toPath === path) {
+      return null
+    }
+
+    const openByPath = new Map<string, boolean>()
+
+    for (const [currentPath, isOpen] of directoryOpenByPath()) {
+      if (currentPath === path || currentPath.startsWith(`${path}/`)) {
+        openByPath.set(currentPath, isOpen)
+      }
+    }
+
+    return {
+      fromPath: path,
+      isOpen: isDirectoryOpen(path),
+      openByPath,
+      toPath,
+    }
+  }
+
+  function seedClosedDirectoryMoveState(moveState: DirectoryMoveState) {
+    if (moveState.isOpen) {
+      return
+    }
+
+    setDirectoryOpenByPath((current) => {
+      if (current.get(moveState.toPath) === false) {
+        return current
+      }
+
+      const next = new Map(current)
+      next.set(moveState.toPath, false)
+      return next
+    })
+  }
+
+  function clearSeededDirectoryMoveState(moveState: DirectoryMoveState) {
+    if (moveState.isOpen) {
+      return
+    }
+
+    setDirectoryOpenByPath((current) => {
+      if (!current.has(moveState.toPath)) {
+        return current
+      }
+
+      const next = new Map(current)
+      next.delete(moveState.toPath)
+      return next
+    })
+  }
+
+  function applyDirectoryMoveState(moveState: DirectoryMoveState) {
+    setDirectoryOpenByPath((current) => {
+      const next = new Map(current)
+
+      for (const path of next.keys()) {
+        if (path === moveState.fromPath || path.startsWith(`${moveState.fromPath}/`)) {
+          next.delete(path)
+        }
+      }
+
+      next.set(moveState.toPath, moveState.isOpen)
+
+      for (const [path, isOpen] of moveState.openByPath) {
+        const suffix = path.slice(moveState.fromPath.length)
+        next.set(`${moveState.toPath}${suffix}`, isOpen)
+      }
+
+      return next
+    })
+  }
+
+  async function moveEntry(entry: ListedEntry, parentPath: string | null) {
+    const moveState = entry.kind === 'directory' ? captureDirectoryMoveState(entry.path, parentPath) : null
+
+    if (moveState !== null) {
+      seedClosedDirectoryMoveState(moveState)
+    }
+
+    const didMove = await props.onMoveEntry(entry, parentPath)
+
+    if (!didMove && moveState !== null) {
+      clearSeededDirectoryMoveState(moveState)
+      return
+    }
+
+    if (didMove && moveState !== null) {
+      applyDirectoryMoveState(moveState)
+    }
   }
 
   function clearSuppressedTreeClick() {
@@ -235,7 +356,7 @@ export function NotesSidebar(props: {
       }
 
       pointerDrag.started = true
-      setDraggedFilePath(pointerDrag.path)
+      setDraggedEntry(pointerDrag.entry)
     }
 
     setDragPreviewPosition({
@@ -264,7 +385,7 @@ export function NotesSidebar(props: {
       return
     }
 
-    props.onMoveEntry(activeDrag.path, target.kind === 'directory' ? target.path : null)
+    void moveEntry(activeDrag.entry, target.kind === 'directory' ? target.path : null)
   }
 
   function handlePointerCancel(event: PointerEvent) {
@@ -296,23 +417,29 @@ export function NotesSidebar(props: {
   }
 
   function setMoveDropTarget(target: MoveDropTarget | null) {
+    const currentDraggedEntry = draggedEntry()
+    const nextTarget =
+      target?.kind === 'directory' && currentDraggedEntry !== null && !canDropInDirectory(currentDraggedEntry, target.path)
+        ? null
+        : target
+
     setDropTarget((current) => {
       const currentPath = current?.kind === 'directory' ? current.path : null
-      const nextPath = target?.kind === 'directory' ? target.path : null
+      const nextPath = nextTarget?.kind === 'directory' ? nextTarget.path : null
 
-      if (current?.kind === target?.kind && currentPath === nextPath) {
+      if (current?.kind === nextTarget?.kind && currentPath === nextPath) {
         return current
       }
 
-      return target
+      return nextTarget
     })
 
-    if (target?.kind === 'directory') {
-      if (hoverOpenPath !== null && hoverOpenPath !== target.path) {
+    if (nextTarget?.kind === 'directory') {
+      if (hoverOpenPath !== null && hoverOpenPath !== nextTarget.path) {
         clearHoverOpenTimer()
       }
 
-      scheduleHoverOpen(target.path)
+      scheduleHoverOpen(nextTarget.path)
       return
     }
 
@@ -437,13 +564,13 @@ export function NotesSidebar(props: {
       </header>
       <div
         classList={{
-          'sidebar-dragging': draggedFilePath() !== null,
+          'sidebar-dragging': draggedEntry() !== null,
           'sidebar-tree-dropzone': true,
           'sidebar-tree-dropzone-root-target': dropTarget()?.kind === 'root',
         }}
         data-tree-root-dropzone="true"
         onDragOver={(event) => {
-          if (draggedFilePath() === null) {
+          if (draggedEntry() === null) {
             return
           }
 
@@ -464,7 +591,7 @@ export function NotesSidebar(props: {
           setMoveDropTarget({ kind: 'root' })
         }}
         onDragLeave={(event) => {
-          if (draggedFilePath() === null) {
+          if (draggedEntry() === null) {
             return
           }
 
@@ -477,9 +604,9 @@ export function NotesSidebar(props: {
           setMoveDropTarget(null)
         }}
         onDrop={(event) => {
-          const path = draggedFilePath()
+          const entry = draggedEntry()
 
-          if (path === null) {
+          if (entry === null) {
             return
           }
 
@@ -491,7 +618,7 @@ export function NotesSidebar(props: {
 
           event.preventDefault()
           clearDragState()
-          props.onMoveEntry(path, null)
+          void moveEntry(entry, null)
         }}
         >
         <Show when={props.nodes.length > 0 || pendingCreation()?.parentPath === null} fallback={<p>{props.emptyMessage}</p>}>
@@ -499,7 +626,7 @@ export function NotesSidebar(props: {
             conflict={props.conflict}
             conflictPaths={props.conflictPaths}
             currentPath={props.currentPath}
-            draggedFilePath={draggedFilePath()}
+            draggedEntry={draggedEntry()}
             dropTarget={dropTarget()}
             isDirectoryOpen={isDirectoryOpen}
             parentPath={null}
@@ -507,6 +634,11 @@ export function NotesSidebar(props: {
             onSetDirectoryOpen={setDirectoryOpen}
             unsavedPath={props.unsavedPath}
             onAcceptTheirs={props.onAcceptTheirs}
+            canDropInDirectory={(path) => {
+              const entry = draggedEntry()
+
+              return entry !== null && canDropInDirectory(entry, path)
+            }}
             pendingCreation={pendingCreation()}
             pendingRename={pendingRename()}
             onCancelAction={clearPendingAction}
@@ -524,14 +656,14 @@ export function NotesSidebar(props: {
               setMoveDropTarget({ kind: 'directory', path })
             }}
             onDropDirectory={(path) => {
-              const sourcePath = draggedFilePath()
+              const entry = draggedEntry()
 
-              if (sourcePath === null) {
+              if (entry === null || !canDropInDirectory(entry, path)) {
                 return
               }
 
               clearDragState()
-              props.onMoveEntry(sourcePath, path)
+              void moveEntry(entry, path)
             }}
             onEndDrag={clearDragState}
             onOpen={props.onOpen}
@@ -539,12 +671,12 @@ export function NotesSidebar(props: {
             onResolveInDiff={props.onResolveInDiff}
             onSaveMine={props.onSaveMine}
             onSaveMineSeparately={props.onSaveMineSeparately}
-            onStartPointerDrag={(path, pointerId, clientX, clientY) => {
+            onStartPointerDrag={(entry, pointerId, clientX, clientY) => {
               stopPointerDrag()
               pointerDrag = {
                 clientX,
                 clientY,
-                path,
+                entry,
                 pointerId,
                 started: false,
               }
@@ -552,8 +684,8 @@ export function NotesSidebar(props: {
               document.addEventListener('pointerup', handlePointerUp, true)
               document.addEventListener('pointercancel', handlePointerCancel, true)
             }}
-            onStartDrag={(path) => {
-              setDraggedFilePath(path)
+            onStartDrag={(entry) => {
+              setDraggedEntry(entry)
               setMoveDropTarget(null)
             }}
             onStartRename={startRename}
@@ -562,7 +694,7 @@ export function NotesSidebar(props: {
           />
         </Show>
       </div>
-      <Show when={draggedFilePath() !== null && dragPreviewPosition() !== null}>
+      <Show when={draggedEntry() !== null && dragPreviewPosition() !== null}>
         <div
           class="sidebar-drag-preview"
           aria-hidden="true"
@@ -571,8 +703,8 @@ export function NotesSidebar(props: {
             top: `${dragPreviewPosition()!.y + 14}px`,
           }}
         >
-          <Codicon name="file" />
-          <span>{getName(draggedFilePath()!)}</span>
+          <Codicon name={draggedEntry()!.kind === 'directory' ? 'folder' : 'file'} />
+          <span>{getName(draggedEntry()!.path)}</span>
         </div>
       </Show>
     </aside>

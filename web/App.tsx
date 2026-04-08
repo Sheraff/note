@@ -10,7 +10,7 @@ import {
   createNote,
   deleteEntry,
   loadNote,
-  moveFile,
+  moveEntry,
   refreshWorkspace,
   renameEntry,
   saveCurrentNote,
@@ -791,16 +791,16 @@ function App() {
     }
   }
 
-  function handleMoveEntry(path: string, parentPath: string | null) {
-    void (async () => {
+  async function handleMoveEntry(entry: ListedEntry, parentPath: string | null): Promise<boolean> {
+    try {
       const saveResult = await flushPendingSave()
 
       if (isSaveBlockedByConflict(saveResult)) {
         setErrorMessage(ACTIVE_CONFLICT_MESSAGE)
-        return
+        return false
       }
 
-      const result = await moveFile(noteContext, path, parentPath)
+      const result = await moveEntry(noteContext, entry, parentPath)
 
       if (result.message !== null) {
         setErrorMessage(result.message)
@@ -812,7 +812,12 @@ function App() {
         setHasUnsyncedWorkspaceChanges(true)
         await requestSync({ mode: 'full', skipPendingSave: true })
       }
-    })().catch(reportError)
+
+      return result.didMove
+    } catch (error) {
+      reportError(error)
+      return false
+    }
   }
 
   function handleAttachFolder() {

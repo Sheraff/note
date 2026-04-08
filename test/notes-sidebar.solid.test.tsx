@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@solidjs/testing-library'
+import { createSignal } from 'solid-js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NotesSidebar } from '../web/app/NotesSidebar.tsx'
 import { buildTree, type ListedEntry } from '../web/notes/tree.ts'
@@ -29,7 +30,7 @@ function renderSidebar(
     onCreateFolder: vi.fn(async () => null),
     onCreateNote: vi.fn(async () => null),
     onDeleteEntry: vi.fn(),
-    onMoveEntry: vi.fn(),
+    onMoveEntry: vi.fn(async () => true),
     onOpen: vi.fn(),
     onOpenConflict: vi.fn(),
     onRenameEntry: vi.fn(async () => null),
@@ -314,7 +315,26 @@ describe('NotesSidebar', () => {
     fireEvent.drop(screen.getByRole('button', { name: 'archive' }))
 
     await waitFor(() => {
-      expect(props.onMoveEntry).toHaveBeenCalledWith('notes/today.md', 'archive')
+      expect(props.onMoveEntry).toHaveBeenCalledWith({ kind: 'file', path: 'notes/today.md' }, 'archive')
+    })
+  })
+
+  it('moves a dragged folder into another folder through onMoveEntry', async () => {
+    const { props } = renderSidebar(
+      {},
+      [
+        { kind: 'directory', path: 'projects' },
+        { kind: 'directory', path: 'archive' },
+        { kind: 'directory', path: 'archive/keep' },
+      ],
+    )
+
+    fireEvent.dragStart(screen.getByRole('button', { name: 'projects' }))
+    fireEvent.dragOver(screen.getByRole('button', { name: 'archive' }))
+    fireEvent.drop(screen.getByRole('button', { name: 'archive' }))
+
+    await waitFor(() => {
+      expect(props.onMoveEntry).toHaveBeenCalledWith({ kind: 'directory', path: 'projects' }, 'archive')
     })
   })
 
@@ -338,7 +358,31 @@ describe('NotesSidebar', () => {
     fireEvent.drop(dropzone)
 
     await waitFor(() => {
-      expect(props.onMoveEntry).toHaveBeenCalledWith('notes/today.md', null)
+      expect(props.onMoveEntry).toHaveBeenCalledWith({ kind: 'file', path: 'notes/today.md' }, null)
+    })
+  })
+
+  it('moves a dragged folder to the root when dropped on empty sidebar space', async () => {
+    const { props } = renderSidebar(
+      {},
+      [
+        { kind: 'directory', path: 'projects' },
+        { kind: 'directory', path: 'projects/source' },
+      ],
+    )
+
+    const dropzone = document.querySelector('.sidebar-tree-dropzone')
+
+    if (!(dropzone instanceof HTMLDivElement)) {
+      throw new Error('Expected a root dropzone element')
+    }
+
+    fireEvent.dragStart(screen.getByRole('button', { name: 'source' }))
+    fireEvent.dragOver(dropzone)
+    fireEvent.drop(dropzone)
+
+    await waitFor(() => {
+      expect(props.onMoveEntry).toHaveBeenCalledWith({ kind: 'directory', path: 'projects/source' }, null)
     })
   })
 
@@ -387,6 +431,110 @@ describe('NotesSidebar', () => {
     await vi.advanceTimersByTimeAsync(600)
 
     expect(screen.queryByRole('button', { name: 'inside.md' })).toBeNull()
+  })
+
+  it('does not move a dragged folder into itself', async () => {
+    const { props } = renderSidebar(
+      {},
+      [
+        { kind: 'directory', path: 'projects' },
+        { kind: 'directory', path: 'projects/archive' },
+      ],
+    )
+
+    const folderButton = screen.getByRole('button', { name: 'projects' })
+
+    fireEvent.dragStart(folderButton)
+    fireEvent.dragOver(folderButton)
+    fireEvent.drop(folderButton)
+
+    await waitFor(() => {
+      expect(props.onMoveEntry).not.toHaveBeenCalled()
+    })
+  })
+
+  it('does not hover-open or move a descendant folder while dragging its ancestor', async () => {
+    vi.useFakeTimers()
+
+    const { props } = renderSidebar(
+      {},
+      [
+        { kind: 'directory', path: 'projects' },
+        { kind: 'directory', path: 'projects/archive' },
+        { kind: 'file', path: 'projects/archive/inside.md' },
+      ],
+    )
+
+    expect(screen.queryByRole('button', { name: 'inside.md' })).toBeNull()
+
+    fireEvent.dragStart(screen.getByRole('button', { name: 'projects' }))
+    fireEvent.dragOver(screen.getByRole('button', { name: 'archive' }))
+    await vi.advanceTimersByTimeAsync(1000)
+    fireEvent.drop(screen.getByRole('button', { name: 'archive' }))
+
+    expect(screen.queryByRole('button', { name: 'inside.md' })).toBeNull()
+    expect(props.onMoveEntry).not.toHaveBeenCalled()
+  })
+
+  it('keeps a moved folder closed when its path changes', async () => {
+    const initialEntries: ListedEntry[] = [
+      { kind: 'directory', path: 'projects' },
+      { kind: 'directory', path: 'projects/source' },
+      { kind: 'file', path: 'projects/source/today.md' },
+    ]
+    const movedEntries: ListedEntry[] = [
+      { kind: 'directory', path: 'source' },
+      { kind: 'file', path: 'source/today.md' },
+    ]
+    const [nodes, setNodes] = createSignal(buildTree(initialEntries))
+    const [currentPath, setCurrentPath] = createSignal<string | null>('projects/source/today.md')
+    const onMoveEntry = vi.fn(async () => {
+      setNodes(buildTree(movedEntries))
+      setCurrentPath('source/today.md')
+      return true
+    })
+
+    render(() => (
+      <NotesSidebar
+        conflict={null}
+        conflictPaths={[]}
+        currentPath={currentPath()}
+        emptyMessage="Attach a folder to reopen your notes."
+        fileCount={1}
+        isReady={true}
+        nodes={nodes()}
+        unsavedPath={null}
+        onAcceptTheirs={vi.fn()}
+        onCreateFolder={vi.fn(async () => null)}
+        onCreateNote={vi.fn(async () => null)}
+        onDeleteEntry={vi.fn()}
+        onMoveEntry={onMoveEntry}
+        onOpen={vi.fn()}
+        onOpenConflict={vi.fn()}
+        onRenameEntry={vi.fn(async () => null)}
+        onResolveInDiff={vi.fn()}
+        onSaveMine={vi.fn()}
+        onSaveMineSeparately={vi.fn()}
+      />
+    ))
+
+    const sourceButton = screen.getByRole('button', { name: 'source' })
+    const dropzone = document.querySelector('.sidebar-tree-dropzone')
+
+    if (!(dropzone instanceof HTMLDivElement)) {
+      throw new Error('Expected a root dropzone element')
+    }
+
+    fireEvent.click(sourceButton)
+    expect(sourceButton.getAttribute('aria-expanded')).toBe('false')
+
+    fireEvent.dragStart(sourceButton)
+    fireEvent.dragOver(dropzone)
+    fireEvent.drop(dropzone)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'source' }).getAttribute('aria-expanded')).toBe('false')
+    })
   })
 
   it('wires the tree conflict actions to the conflict callbacks', () => {

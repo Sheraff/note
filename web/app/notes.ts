@@ -24,7 +24,7 @@ export type SaveCurrentNoteResult =
   | { status: 'reloaded' }
   | { status: 'conflict'; conflict: NoteConflict }
 
-export type MoveFileResult =
+export type MoveEntryResult =
   | { didMove: false; message: string | null }
   | { didMove: true; message: null }
 
@@ -306,6 +306,14 @@ function getPreferredRenamePath(currentPath: string | null, path: string, nextPa
   return currentPath.startsWith(`${path}/`) ? `${nextPath}${currentPath.slice(path.length)}` : currentPath
 }
 
+function isInvalidMoveParent(entry: ListedEntry, parentPath: string | null): boolean {
+  if (entry.kind !== 'directory' || parentPath === null) {
+    return false
+  }
+
+  return parentPath === entry.path || parentPath.startsWith(`${entry.path}/`)
+}
+
 async function createEntry(
   context: NoteContext,
   kind: ListedEntry['kind'],
@@ -393,7 +401,7 @@ export async function renameEntry(context: NoteContext, entry: ListedEntry, name
   }
 }
 
-export async function moveFile(context: NoteContext, path: string, parentPath: string | null): Promise<MoveFileResult> {
+export async function moveEntry(context: NoteContext, entry: ListedEntry, parentPath: string | null): Promise<MoveEntryResult> {
   const currentStorage = context.storage()
 
   if (currentStorage === null) {
@@ -405,13 +413,16 @@ export async function moveFile(context: NoteContext, path: string, parentPath: s
 
   context.setErrorMessage(null)
 
-  const entry: ListedEntry = {
-    kind: 'file',
-    path,
+  if (isInvalidMoveParent(entry, parentPath)) {
+    return {
+      didMove: false,
+      message: 'A folder cannot be moved into itself or one of its subfolders.',
+    }
   }
-  const nextPath = joinNotePath(parentPath, getName(path))
 
-  if (nextPath === path) {
+  const nextPath = joinNotePath(parentPath, getName(entry.path))
+
+  if (nextPath === entry.path) {
     return {
       didMove: false,
       message: null,
@@ -426,8 +437,8 @@ export async function moveFile(context: NoteContext, path: string, parentPath: s
   }
 
   try {
-    await currentStorage.renameEntry(path, nextPath, 'file')
-    await refreshWorkspace(context, getPreferredRenamePath(context.currentPath(), path, nextPath))
+    await currentStorage.renameEntry(entry.path, nextPath, entry.kind)
+    await refreshWorkspace(context, getPreferredRenamePath(context.currentPath(), entry.path, nextPath))
     return {
       didMove: true,
       message: null,
@@ -435,7 +446,7 @@ export async function moveFile(context: NoteContext, path: string, parentPath: s
   } catch (error) {
     return {
       didMove: false,
-      message: getRenameFailureMessage('file', error),
+      message: getRenameFailureMessage(entry.kind, error),
     }
   }
 }
