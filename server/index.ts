@@ -39,7 +39,6 @@ const serverDir = fileURLToPath(new URL('.', import.meta.url))
 const clientDistDir = isDev ? resolve(serverDir, '../dist/client') : resolve(serverDir, '../client')
 const IMMUTABLE_ASSET_CACHE_CONTROL = 'public, max-age=31536000, immutable'
 const HTML_CACHE_CONTROL = 'no-cache'
-let vite: ViteDevServer | undefined
 
 function isMainModule(): boolean {
   return process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href
@@ -128,6 +127,8 @@ if (isMainModule()) {
   const app = createApp()
 
   if (isDev) {
+    let vite: ViteDevServer | undefined
+
     app.use('*', async (c, next) => {
       if (c.req.path.startsWith('/api')) {
         await next()
@@ -156,6 +157,15 @@ if (isMainModule()) {
         return c.text('Unknown error', 500)
       }
     })
+
+    const { createServer } = await import('vite')
+
+    vite = await createServer({
+      server: {
+        middlewareMode: true,
+      },
+    })
+
   } else {
     app.use(
       '*',
@@ -181,16 +191,6 @@ if (isMainModule()) {
 
       c.header('Cache-Control', HTML_CACHE_CONTROL)
       return c.html(indexHtml)
-    })
-  }
-
-  if (isDev) {
-    const { createServer } = await import('vite')
-
-    vite = await createServer({
-      server: {
-        middlewareMode: true,
-      },
     })
   }
 
