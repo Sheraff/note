@@ -1,8 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createFolder, moveEntry, refreshWorkspace, renameEntry, saveCurrentNote, type NoteConflict, type NoteContext } from '../web/app/notes.ts'
 import { hashContent } from '../web/notes/hashes.ts'
-import type { AppSettings } from '../web/schemas.ts'
+import { DEFAULT_APP_SETTINGS, type AppSettings } from '../web/schemas.ts'
 import type { ListedEntry, NoteStorage, StoredFile } from '../web/storage/types.ts'
+
+function createSettings(overrides: Partial<AppSettings> = {}): AppSettings {
+  return {
+    ...DEFAULT_APP_SETTINGS,
+    ...overrides,
+    openDirectoryPaths: {
+      ...DEFAULT_APP_SETTINGS.openDirectoryPaths,
+      ...overrides.openDirectoryPaths,
+    },
+  }
+}
 
 async function createStoredFile(path: string, content: string, updatedAt: string): Promise<StoredFile> {
   return {
@@ -62,10 +73,10 @@ function createMockContext(
     setNoteConflict?: (conflict: NoteConflict | null) => void
   } = {},
 ): NoteContext {
-  const settings: AppSettings = {
+  const settings = createSettings({
     backend: 'directory',
     lastOpenedPath: null,
-  }
+  })
 
   const entries = options.entries ?? []
 
@@ -276,10 +287,10 @@ describe('inline create errors', () => {
       renameEntry: renameEntryMock,
     }
 
-    const settings: AppSettings = {
+    const settings = createSettings({
       backend: 'directory',
       lastOpenedPath: null,
-    }
+    })
 
     const entries: ListedEntry[] = [{ kind: 'file', path: 'notes/today.md' }]
 
@@ -310,10 +321,14 @@ describe('inline create errors', () => {
     expect(setEntries).toHaveBeenCalledWith([{ kind: 'file', path: 'notes/done.md' }])
     expect(setCurrentPath).toHaveBeenCalledWith('notes/done.md')
     expect(setEditorValue).toHaveBeenCalledWith('# Done\n')
-    expect(saveSettings).toHaveBeenCalledWith({
+    expect(saveSettings).toHaveBeenCalledWith(createSettings({
       backend: 'directory',
       lastOpenedPath: 'notes/done.md',
-    })
+      openDirectoryPaths: {
+        directory: ['notes'],
+        opfs: [],
+      },
+    }))
   })
 
   it('refreshes the open file inside a renamed folder', async () => {
@@ -357,10 +372,10 @@ describe('inline create errors', () => {
       renameEntry: renameEntryMock,
     }
 
-    const settings: AppSettings = {
+    const settings = createSettings({
       backend: 'directory',
       lastOpenedPath: null,
-    }
+    })
 
     const entries: ListedEntry[] = [
       { kind: 'directory', path: 'notes' },
@@ -440,10 +455,10 @@ describe('moveEntry', () => {
       renameEntry: renameEntryMock,
     }
 
-    const settings: AppSettings = {
+    const settings = createSettings({
       backend: 'directory',
       lastOpenedPath: null,
-    }
+    })
 
     const entries: ListedEntry[] = [
       { kind: 'directory', path: 'notes' },
@@ -484,10 +499,14 @@ describe('moveEntry', () => {
     ])
     expect(setCurrentPath).toHaveBeenCalledWith('archive/today.md')
     expect(setEditorValue).toHaveBeenCalledWith('# Archived\n')
-    expect(saveSettings).toHaveBeenCalledWith({
+    expect(saveSettings).toHaveBeenCalledWith(createSettings({
       backend: 'directory',
       lastOpenedPath: 'archive/today.md',
-    })
+      openDirectoryPaths: {
+        directory: ['archive'],
+        opfs: [],
+      },
+    }))
   })
 
   it('moves a folder into another folder and refreshes the open descendant path', async () => {
@@ -535,10 +554,10 @@ describe('moveEntry', () => {
       renameEntry: renameEntryMock,
     }
 
-    const settings: AppSettings = {
+    const settings = createSettings({
       backend: 'directory',
       lastOpenedPath: null,
-    }
+    })
 
     const entries: ListedEntry[] = [
       { kind: 'directory', path: 'notes' },
@@ -580,10 +599,14 @@ describe('moveEntry', () => {
     ])
     expect(setCurrentPath).toHaveBeenCalledWith('archive/notes/today.md')
     expect(setEditorValue).toHaveBeenCalledWith('# Archived\n')
-    expect(saveSettings).toHaveBeenCalledWith({
+    expect(saveSettings).toHaveBeenCalledWith(createSettings({
       backend: 'directory',
       lastOpenedPath: 'archive/notes/today.md',
-    })
+      openDirectoryPaths: {
+        directory: ['archive', 'archive/notes'],
+        opfs: [],
+      },
+    }))
   })
 
   it('returns a conflict when the destination folder already has a file with the same name', async () => {
@@ -830,10 +853,14 @@ describe('saveCurrentNote', () => {
     expect(setEditorValue).toHaveBeenCalledWith('# Updated\n')
     expect(setLoadedFileSnapshot).toHaveBeenCalledWith(diskFile)
     expect(setNoteConflict).not.toHaveBeenCalled()
-    expect(saveSettings).toHaveBeenCalledWith({
+    expect(saveSettings).toHaveBeenCalledWith(createSettings({
       backend: 'directory',
       lastOpenedPath: 'notes/today.md',
-    })
+      openDirectoryPaths: {
+        directory: ['notes'],
+        opfs: [],
+      },
+    }))
   })
 
   it('returns a conflict when both disk and draft changed', async () => {
@@ -1079,9 +1106,13 @@ describe('refreshWorkspace', () => {
     expect(setDraftContent).toHaveBeenCalledWith('# Remote\n')
     expect(setEditorValue).toHaveBeenCalledWith('# Remote\n')
     expect(setLoadedFileSnapshot).toHaveBeenCalledWith(syncedFile)
-    expect(saveSettings).toHaveBeenCalledWith({
+    expect(saveSettings).toHaveBeenCalledWith(createSettings({
       backend: 'directory',
       lastOpenedPath: 'notes/today.md',
-    })
+      openDirectoryPaths: {
+        directory: ['notes'],
+        opfs: [],
+      },
+    }))
   })
 })

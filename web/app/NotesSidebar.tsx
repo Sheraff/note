@@ -1,5 +1,5 @@
 import { createHotkeyHandler } from '@tanstack/hotkeys'
-import { Show, createEffect, createSignal, onCleanup } from 'solid-js'
+import { Show, createMemo, createSignal, onCleanup } from 'solid-js'
 import { getName, getParentPath, joinNotePath } from '../notes/paths.ts'
 import type { TreeNode } from '../notes/tree.ts'
 import type { ListedEntry } from '../storage/types.ts'
@@ -10,9 +10,89 @@ import './NotesSidebar.css'
 
 type DirectoryMoveState = {
   fromPath: string
-  isOpen: boolean
-  openByPath: Map<string, boolean>
+  nextPersistedOpenDirectoryPaths: string[]
+  previousPersistedOpenDirectoryPaths: string[]
   toPath: string
+}
+
+function arePathArraysEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((path, index) => path === right[index])
+}
+
+function serializePathSet(paths: Iterable<string>): string[] {
+  return [...new Set(paths)].sort()
+}
+
+function collectPathChain(path: string): string[] {
+  const directoryPaths: string[] = []
+  let currentPath: string | null = path
+
+  while (currentPath !== null) {
+    directoryPaths.unshift(currentPath)
+    currentPath = getParentPath(currentPath)
+  }
+
+  return directoryPaths
+}
+
+function updatePathArray(current: string[], paths: Iterable<string>, isPresent: boolean): string[] {
+  const next = new Set(current)
+
+  for (const path of paths) {
+    if (isPresent) {
+      next.add(path)
+      continue
+    }
+
+    next.delete(path)
+  }
+
+  return serializePathSet(next)
+}
+
+function movePath(path: string, fromPath: string, toPath: string): string {
+  if (path === fromPath || path.startsWith(`${fromPath}/`)) {
+    return `${toPath}${path.slice(fromPath.length)}`
+  }
+
+  return path
+}
+
+function movePathArray(current: string[], fromPath: string, toPath: string): string[] {
+  return serializePathSet(current.map((path) => movePath(path, fromPath, toPath)))
+}
+
+function getVisibleOpenDirectoryPaths(options: {
+  knownDirectoryPaths: Set<string>
+  persistedOpenDirectoryPaths: string[]
+}): Set<string> {
+  const openDirectoryPaths = new Set<string>()
+
+  for (const path of options.persistedOpenDirectoryPaths) {
+    if (options.knownDirectoryPaths.has(path)) {
+      openDirectoryPaths.add(path)
+    }
+  }
+
+  return openDirectoryPaths
+}
+
+function collectDirectoryPaths(nodes: TreeNode[]): Set<string> {
+  const paths = new Set<string>()
+
+  for (const node of nodes) {
+    if (node.kind !== 'directory') {
+      continue
+    }
+
+    paths.add(node.path)
+
+    for (const childPath of collectDirectoryPaths(node.children)) {
+      paths.add(childPath)
+    }
+  }
+
+  return paths
 }
 
 export function NotesSidebar(props: {
@@ -26,6 +106,7 @@ export function NotesSidebar(props: {
   fileCount: number
   isReady: boolean
   nodes: TreeNode[]
+  persistedOpenDirectoryPaths: string[]
   unsavedPath: string | null
   onAcceptTheirs(): void
   onCreateFolder(parentPath: string | null, name: string): Promise<string | null>
@@ -33,6 +114,7 @@ export function NotesSidebar(props: {
   onDeleteEntry(path: string, kind: TreeNode['kind']): void
   onMoveEntry(entry: ListedEntry, parentPath: string | null): Promise<boolean>
   onOpen(path: string): void
+  onPersistedOpenDirectoryPathsChange(paths: string[]): void
   onOpenConflict(path: string): void
   onRenameEntry(path: string, kind: TreeNode['kind'], name: string): Promise<string | null>
   onResolveInDiff(): void
@@ -41,96 +123,62 @@ export function NotesSidebar(props: {
 }) {
   const [pendingCreation, setPendingCreation] = createSignal<PendingCreation | null>(null)
   const [pendingRename, setPendingRename] = createSignal<PendingRename | null>(null)
-  const [directoryOpenByPath, setDirectoryOpenByPath] = createSignal(new Map<string, boolean>())
+  const [pendingPersistedOpenDirectoryPaths, setPendingPersistedOpenDirectoryPaths] = createSignal<string[] | null>(null)
   const [draggedEntry, setDraggedEntry] = createSignal<ListedEntry | null>(null)
   const [dropTarget, setDropTarget] = createSignal<MoveDropTarget | null>(null)
   const [dragPreviewPosition, setDragPreviewPosition] = createSignal<{ x: number; y: number } | null>(null)
   let suppressTreeClickCleanup: (() => void) | null = null
   let pointerDrag:
     | {
-        clientX: number
-        clientY: number
-        entry: ListedEntry
-        pointerId: number
-        started: boolean
-      }
+      clientX: number
+      clientY: number
+      entry: ListedEntry
+      pointerId: number
+      started: boolean
+    }
     | null = null
   let hoverOpenPath: string | null = null
   let hoverOpenTimeout: number | undefined
 
-  function openDirectoryChain(path: string, respectExplicitClosed = false) {
-    const directoryPaths: string[] = []
-    let currentPath: string | null = path
+  const knownDirectoryPaths = createMemo(() => collectDirectoryPaths(props.nodes))
+  const effectivePersistedOpenDirectoryPaths = createMemo(() => {
+    const pending = pendingPersistedOpenDirectoryPaths()
 
-    while (currentPath !== null) {
-      directoryPaths.unshift(currentPath)
-      currentPath = getParentPath(currentPath)
-    }
+    return pending !== null && !arePathArraysEqual(pending, props.persistedOpenDirectoryPaths)
+      ? pending
+      : props.persistedOpenDirectoryPaths
+  })
+  const visibleOpenDirectoryPaths = createMemo(() => getVisibleOpenDirectoryPaths({
+    knownDirectoryPaths: knownDirectoryPaths(),
+    persistedOpenDirectoryPaths: effectivePersistedOpenDirectoryPaths(),
+  }))
 
-    setDirectoryOpenByPath((current) => {
-      let blockedPath: string | null = null
-      let next: Map<string, boolean> | null = null
+  function setPersistedOpenDirectoryPaths(nextPersistedOpenDirectoryPaths: string[], persist = true) {
+    const normalizedOpenDirectoryPaths = serializePathSet(nextPersistedOpenDirectoryPaths)
 
-      for (const directoryPath of directoryPaths) {
-        if (blockedPath !== null && directoryPath.startsWith(`${blockedPath}/`)) {
-          continue
-        }
-
-        if (respectExplicitClosed && current.get(directoryPath) === false) {
-          blockedPath = directoryPath
-          continue
-        }
-
-        if (current.get(directoryPath) === true) {
-          continue
-        }
-
-        if (next === null) {
-          next = new Map(current)
-        }
-
-        next.set(directoryPath, true)
-      }
-
-      return next ?? current
-    })
-  }
-
-  function setDirectoryOpen(path: string, isOpen: boolean) {
-    setDirectoryOpenByPath((current) => {
-      if (current.get(path) === isOpen) {
-        return current
-      }
-
-      const next = new Map(current)
-      next.set(path, isOpen)
-      return next
-    })
-  }
-
-  function isDirectoryOpen(path: string): boolean {
-    const explicitState = directoryOpenByPath().get(path)
-
-    if (explicitState !== undefined) {
-      return explicitState
-    }
-
-    return getParentPath(path) === null
-  }
-
-  createEffect(() => {
-    const path = props.currentPath
-
-    if (path === null) {
+    if (arePathArraysEqual(normalizedOpenDirectoryPaths, effectivePersistedOpenDirectoryPaths())) {
       return
     }
 
-    const parentPath = getParentPath(path)
-
-    if (parentPath !== null) {
-      openDirectoryChain(parentPath, true)
+    setPendingPersistedOpenDirectoryPaths(normalizedOpenDirectoryPaths)
+    if (!persist) {
+      return
     }
-  })
+
+    props.onPersistedOpenDirectoryPathsChange(normalizedOpenDirectoryPaths)
+  }
+
+  function openDirectoryChain(path: string) {
+    setPersistedOpenDirectoryPaths(updatePathArray(effectivePersistedOpenDirectoryPaths(), collectPathChain(path), true))
+  }
+
+  function setDirectoryOpen(path: string, isOpen: boolean) {
+    setPersistedOpenDirectoryPaths(updatePathArray(effectivePersistedOpenDirectoryPaths(), [path], isOpen))
+  }
+
+  function isDirectoryOpen(path: string): boolean {
+    return visibleOpenDirectoryPaths().has(path)
+  }
 
   function clearPendingAction() {
     setPendingCreation(null)
@@ -168,86 +216,39 @@ export function NotesSidebar(props: {
       return null
     }
 
-    const openByPath = new Map<string, boolean>()
-
-    for (const [currentPath, isOpen] of directoryOpenByPath()) {
-      if (currentPath === path || currentPath.startsWith(`${path}/`)) {
-        openByPath.set(currentPath, isOpen)
-      }
-    }
+    const previousPersistedOpenDirectoryPaths = effectivePersistedOpenDirectoryPaths()
 
     return {
       fromPath: path,
-      isOpen: isDirectoryOpen(path),
-      openByPath,
+      nextPersistedOpenDirectoryPaths: movePathArray(previousPersistedOpenDirectoryPaths, path, toPath),
+      previousPersistedOpenDirectoryPaths,
       toPath,
     }
   }
 
-  function seedClosedDirectoryMoveState(moveState: DirectoryMoveState) {
-    if (moveState.isOpen) {
-      return
-    }
-
-    setDirectoryOpenByPath((current) => {
-      if (current.get(moveState.toPath) === false) {
-        return current
-      }
-
-      const next = new Map(current)
-      next.set(moveState.toPath, false)
-      return next
-    })
+  function previewDirectoryMoveState(moveState: DirectoryMoveState) {
+    setPendingPersistedOpenDirectoryPaths(moveState.nextPersistedOpenDirectoryPaths)
   }
 
-  function clearSeededDirectoryMoveState(moveState: DirectoryMoveState) {
-    if (moveState.isOpen) {
-      return
-    }
-
-    setDirectoryOpenByPath((current) => {
-      if (!current.has(moveState.toPath)) {
-        return current
-      }
-
-      const next = new Map(current)
-      next.delete(moveState.toPath)
-      return next
-    })
+  function revertDirectoryMoveState(moveState: DirectoryMoveState) {
+    setPendingPersistedOpenDirectoryPaths(moveState.previousPersistedOpenDirectoryPaths)
   }
 
   function applyDirectoryMoveState(moveState: DirectoryMoveState) {
-    setDirectoryOpenByPath((current) => {
-      const next = new Map(current)
-
-      for (const path of next.keys()) {
-        if (path === moveState.fromPath || path.startsWith(`${moveState.fromPath}/`)) {
-          next.delete(path)
-        }
-      }
-
-      next.set(moveState.toPath, moveState.isOpen)
-
-      for (const [path, isOpen] of moveState.openByPath) {
-        const suffix = path.slice(moveState.fromPath.length)
-        next.set(`${moveState.toPath}${suffix}`, isOpen)
-      }
-
-      return next
-    })
+    setPersistedOpenDirectoryPaths(moveState.nextPersistedOpenDirectoryPaths)
   }
 
   async function moveEntry(entry: ListedEntry, parentPath: string | null) {
     const moveState = entry.kind === 'directory' ? captureDirectoryMoveState(entry.path, parentPath) : null
 
     if (moveState !== null) {
-      seedClosedDirectoryMoveState(moveState)
+      previewDirectoryMoveState(moveState)
     }
 
     const didMove = await props.onMoveEntry(entry, parentPath)
 
     if (!didMove && moveState !== null) {
-      clearSeededDirectoryMoveState(moveState)
+      revertDirectoryMoveState(moveState)
       return
     }
 
@@ -620,7 +621,7 @@ export function NotesSidebar(props: {
           clearDragState()
           void moveEntry(entry, null)
         }}
-        >
+      >
         <Show when={props.nodes.length > 0 || pendingCreation()?.parentPath === null} fallback={<p>{props.emptyMessage}</p>}>
           <FileTree
             conflict={props.conflict}

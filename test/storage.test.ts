@@ -1,7 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AppSettings, SyncState } from '../web/schemas.ts'
+import { DEFAULT_APP_SETTINGS, type AppSettings, type SyncState } from '../web/schemas.ts'
 import type { NoteStorage } from '../web/storage/types.ts'
 import { attachFolder, bootstrapWorkspace, reconnectFolder, type StorageContext } from '../web/app/storage.ts'
+
+function createSettings(overrides: Partial<AppSettings>): AppSettings {
+  return {
+    ...DEFAULT_APP_SETTINGS,
+    ...overrides,
+    openDirectoryPaths: {
+      ...DEFAULT_APP_SETTINGS.openDirectoryPaths,
+      ...overrides.openDirectoryPaths,
+    },
+  }
+}
 
 const {
   createDirectoryStorageMock,
@@ -492,10 +503,10 @@ describe('workspace storage bootstrap', () => {
   })
 
   it('reopens the saved folder when permission is already granted', async () => {
-    const settings: AppSettings = {
+    const settings = createSettings({
       backend: 'directory',
       lastOpenedPath: 'notes/today.md',
-    }
+    })
     const handle = { name: 'Notes' } as FileSystemDirectoryHandle
     const directoryStorage = createStorage('directory', 'Notes')
     const context = createContext(settings)
@@ -519,10 +530,10 @@ describe('workspace storage bootstrap', () => {
   })
 
   it('keeps the saved handle pending reconnect when startup permission is not granted', async () => {
-    const settings: AppSettings = {
+    const settings = createSettings({
       backend: 'directory',
       lastOpenedPath: 'notes/today.md',
-    }
+    })
     const handle = { name: 'Notes' } as FileSystemDirectoryHandle
     const context = createContext(settings)
 
@@ -542,10 +553,10 @@ describe('workspace storage bootstrap', () => {
   })
 
   it('keeps the saved handle pending reconnect when startup permission is denied', async () => {
-    const settings: AppSettings = {
+    const settings = createSettings({
       backend: 'directory',
       lastOpenedPath: 'notes/today.md',
-    }
+    })
     const handle = { name: 'Notes' } as FileSystemDirectoryHandle
     const context = createContext(settings)
 
@@ -571,10 +582,10 @@ describe('workspace attach', () => {
   })
 
   it('persists the picked folder handle and activates directory storage', async () => {
-    const settings: AppSettings = {
+    const settings = createSettings({
       backend: 'opfs',
       lastOpenedPath: 'notes/today.md',
-    }
+    })
     const handle = { name: 'Notes' } as FileSystemDirectoryHandle
     const directoryStorage = createStorage('directory', 'Notes')
     const context = createContext(settings)
@@ -596,10 +607,10 @@ describe('workspace attach', () => {
     expect(context.setErrorMessage).toHaveBeenCalledWith(null)
     expect(context.setReconnectableDirectoryName).toHaveBeenCalledWith(null)
     expect(context.setStorage).toHaveBeenCalledWith(directoryStorage)
-    expect(context.saveSettings).toHaveBeenCalledWith({
+    expect(context.saveSettings).toHaveBeenCalledWith(createSettings({
       backend: 'directory',
       lastOpenedPath: 'notes/today.md',
-    })
+    }))
     expect(context.refreshWorkspace).toHaveBeenCalledWith('notes/today.md')
     expect(context.focusEditor).toHaveBeenCalledTimes(1)
   })
@@ -611,10 +622,10 @@ describe('workspace reconnect', () => {
   })
 
   it('throws when no saved folder handle is available to reconnect', async () => {
-    const context = createContext({
+    const context = createContext(createSettings({
       backend: 'directory',
       lastOpenedPath: 'notes/today.md',
-    })
+    }))
 
     getDirectoryHandleMock.mockResolvedValue(null)
 
@@ -625,10 +636,10 @@ describe('workspace reconnect', () => {
   })
 
   it('reuses the saved folder handle on reconnect', async () => {
-    const settings: AppSettings = {
+    const settings = createSettings({
       backend: 'directory',
       lastOpenedPath: 'notes/today.md',
-    }
+    })
     const handle = { name: 'Notes' } as FileSystemDirectoryHandle
     const directoryStorage = createStorage('directory', 'Notes')
     const context = createContext(settings)

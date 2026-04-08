@@ -102,7 +102,20 @@ export async function getAppSettings(): Promise<AppSettings> {
     return DEFAULT_APP_SETTINGS
   }
 
-  return v.parse(AppSettingsSchema, value)
+  const partialSettings = value !== null && typeof value === 'object' ? value as Record<string, unknown> : {}
+  const partialOpenDirectoryPaths =
+    partialSettings.openDirectoryPaths !== null && typeof partialSettings.openDirectoryPaths === 'object'
+      ? partialSettings.openDirectoryPaths as Record<string, unknown>
+      : {}
+
+  return v.parse(AppSettingsSchema, {
+    ...DEFAULT_APP_SETTINGS,
+    ...partialSettings,
+    openDirectoryPaths: {
+      ...DEFAULT_APP_SETTINGS.openDirectoryPaths,
+      ...partialOpenDirectoryPaths,
+    },
+  })
 }
 
 export async function setAppSettings(settings: AppSettings): Promise<void> {

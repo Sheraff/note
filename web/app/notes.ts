@@ -46,13 +46,27 @@ export type NoteContext = {
   draftContent(): string
   setDraftContent(content: string): void
   settings(): AppSettings
-  saveSettings(nextSettings: AppSettings): Promise<void>
+  saveSettings?(nextSettings: AppSettings): Promise<void>
+  updateSettings?(updater: (current: AppSettings) => AppSettings): Promise<AppSettings>
   setEntries(entries: ListedEntry[]): void
   setErrorMessage(message: string | null): void
   setEditorValue(value: string): void
   loadedFileSnapshot(): StoredFile | null
   setLoadedFileSnapshot(file: StoredFile | null): void
   setNoteConflict(conflict: NoteConflict | null): void
+}
+
+async function updateStoredSettings(
+  context: Pick<NoteContext, 'saveSettings' | 'settings' | 'updateSettings'>,
+  updater: (current: AppSettings) => AppSettings,
+): Promise<AppSettings> {
+  if (context.updateSettings !== undefined) {
+    return context.updateSettings(updater)
+  }
+
+  const nextSettings = updater(context.settings())
+  await context.saveSettings?.(nextSettings)
+  return nextSettings
 }
 
 function isSameStoredFile(left: StoredFile | null, right: StoredFile | null): boolean {
@@ -64,14 +78,43 @@ function isSameStoredFile(left: StoredFile | null, right: StoredFile | null): bo
 }
 
 async function applyLoadedFile(context: NoteContext, file: StoredFile): Promise<void> {
+  const parentPath = getParentPath(file.path)
+  const openDirectoryPaths =
+    parentPath === null
+      ? []
+      : collectPathChain(parentPath)
+
   context.setCurrentPath(file.path)
   context.setDraftContent(file.content)
   context.setEditorValue(file.content)
   context.setLoadedFileSnapshot(file)
-  await context.saveSettings({
-    ...context.settings(),
+  await updateStoredSettings(context, (current) => ({
+    ...current,
     lastOpenedPath: file.path,
-  })
+    openDirectoryPaths: {
+      ...current.openDirectoryPaths,
+      [current.backend]: serializePathSet([
+        ...current.openDirectoryPaths[current.backend],
+        ...openDirectoryPaths,
+      ]),
+    },
+  }))
+}
+
+function collectPathChain(path: string): string[] {
+  const directoryPaths: string[] = []
+  let currentPath: string | null = path
+
+  while (currentPath !== null) {
+    directoryPaths.unshift(currentPath)
+    currentPath = getParentPath(currentPath)
+  }
+
+  return directoryPaths
+}
+
+function serializePathSet(paths: Iterable<string>): string[] {
+  return [...new Set(paths)].sort()
 }
 
 function clearLoadedFile(context: NoteContext) {

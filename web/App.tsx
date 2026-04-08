@@ -1,5 +1,5 @@
 import { createMultiHotkeyHandler } from '@tanstack/hotkeys'
-import { createMemo, createSignal, onCleanup, onMount, type JSX } from 'solid-js'
+import { Show, createMemo, createSignal, onCleanup, onMount, type JSX } from 'solid-js'
 import { EditorPane } from './app/EditorPane.tsx'
 import type { EntryEditorSubmitSource } from './app/FileTree.tsx'
 import { NotesSidebar } from './app/NotesSidebar.tsx'
@@ -92,6 +92,10 @@ function getStorageTransferConflictMessage(directoryName: string, conflict: Stor
   return `Can't transfer OPFS notes because ${conflict.path} already exists in ${directoryName}.`
 }
 
+function arePathArraysEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((path, index) => path === right[index])
+}
+
 function App() {
   let editorElement: HTMLDivElement | undefined
   let editor: MonacoController | undefined
@@ -100,6 +104,7 @@ function App() {
   let autoSyncInterval: number | undefined
   let activeSyncOpenNoteSnapshots: Map<string, OpenNoteSyncSnapshot> | null = null
   let lastAutoSyncAt = 0
+  let settingsUpdateQueue = Promise.resolve()
 
   const [sidebarWidth, setSidebarWidth] = createSignal(300)
 
@@ -296,9 +301,17 @@ function App() {
     })
   }
 
-  async function saveSettings(nextSettings: AppSettings) {
-    setSettings(nextSettings)
-    await setAppSettings(nextSettings)
+  function updateSettings(updater: (current: AppSettings) => AppSettings): Promise<AppSettings> {
+    const runUpdate = settingsUpdateQueue.catch(() => undefined).then(async () => {
+      const nextSettings = updater(settings())
+
+      setSettings(nextSettings)
+      await setAppSettings(nextSettings)
+      return nextSettings
+    })
+
+    settingsUpdateQueue = runUpdate.then(() => undefined, () => undefined)
+    return runUpdate
   }
 
   function trackSaveResult(result: PersistResult) {
@@ -370,7 +383,7 @@ function App() {
     draftContent,
     setDraftContent,
     settings,
-    saveSettings,
+    updateSettings,
     setEntries,
     setErrorMessage,
     setEditorValue(value) {
@@ -384,7 +397,7 @@ function App() {
   const storageContext: StorageContext = {
     settings,
     setSettings,
-    saveSettings,
+    updateSettings,
     setStorage,
     setSyncState: setSyncStateSignal,
     setReconnectableDirectoryName,
@@ -460,10 +473,10 @@ function App() {
     editor?.setValue(conflict.draftContent)
     setLoadedFileSnapshot(conflict.loadedSnapshot)
     snapshotCurrentOpenNoteForSync()
-    await saveSettings({
-      ...settings(),
+    await updateSettings((current) => ({
+      ...current,
       lastOpenedPath: conflict.path,
-    })
+    }))
 
     if (conflict.preferredMode === 'diff') {
       setIsDiffMode(true)
@@ -1048,35 +1061,55 @@ function App() {
   return (
     <div class="app">
       <main class="workspace" style={{ 'grid-template-columns': `${sidebarWidth()}px 0px 1fr` } as JSX.CSSProperties}>
-        <NotesSidebar
-          conflict={conflictSummary()}
-          conflictPaths={conflictPaths()}
-          currentPath={currentPath()}
-          emptyMessage={emptyMessage()}
-          fileCount={fileCount()}
-          isReady={storage() !== null}
-          nodes={tree()}
-          unsavedPath={unsavedPath()}
-          onAcceptTheirs={() => {
-            void handleRestoreFromDisk().catch(reportError)
-          }}
-          onCreateFolder={handleCreateFolder}
-          onCreateNote={handleCreateNote}
-          onDeleteEntry={handleDeleteEntry}
-          onOpen={handleOpenNote}
-          onOpenConflict={handleOpenNote}
-          onMoveEntry={handleMoveEntry}
-          onRenameEntry={handleRenameEntry}
-          onResolveInDiff={() => {
-            void handleOpenConflictDiff().catch(reportError)
-          }}
-          onSaveMine={() => {
-            void handleOverwriteWithDraft().catch(reportError)
-          }}
-          onSaveMineSeparately={() => {
-            void handleSaveDraftAsCopy().catch(reportError)
-          }}
-        />
+        <Show when={settings().backend} keyed>
+          <NotesSidebar
+            conflict={conflictSummary()}
+            conflictPaths={conflictPaths()}
+            currentPath={currentPath()}
+            emptyMessage={emptyMessage()}
+            fileCount={fileCount()}
+            isReady={storage() !== null}
+            nodes={tree()}
+            persistedOpenDirectoryPaths={settings().openDirectoryPaths[settings().backend]}
+            unsavedPath={unsavedPath()}
+            onAcceptTheirs={() => {
+              void handleRestoreFromDisk().catch(reportError)
+            }}
+            onCreateFolder={handleCreateFolder}
+            onCreateNote={handleCreateNote}
+            onDeleteEntry={handleDeleteEntry}
+            onOpen={handleOpenNote}
+            onOpenConflict={handleOpenNote}
+            onMoveEntry={handleMoveEntry}
+            onPersistedOpenDirectoryPathsChange={(nextOpenDirectoryPaths) => {
+              void updateSettings((current) => {
+                const persistedOpenDirectoryPaths = current.openDirectoryPaths[current.backend]
+
+                if (arePathArraysEqual(persistedOpenDirectoryPaths, nextOpenDirectoryPaths)) {
+                  return current
+                }
+
+                return {
+                  ...current,
+                  openDirectoryPaths: {
+                    ...current.openDirectoryPaths,
+                    [current.backend]: nextOpenDirectoryPaths,
+                  },
+                }
+              }).catch(reportError)
+            }}
+            onRenameEntry={handleRenameEntry}
+            onResolveInDiff={() => {
+              void handleOpenConflictDiff().catch(reportError)
+            }}
+            onSaveMine={() => {
+              void handleOverwriteWithDraft().catch(reportError)
+            }}
+            onSaveMineSeparately={() => {
+              void handleSaveDraftAsCopy().catch(reportError)
+            }}
+          />
+        </Show>
         <div class="resize-handle" onMouseDown={handleResizeStart} />
         <EditorPane
           currentPath={currentPath()}

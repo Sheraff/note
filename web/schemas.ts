@@ -16,9 +16,15 @@ function isDirectoryHandle(input: unknown): input is FileSystemDirectoryHandle {
 
 export const StorageBackendSchema = v.picklist(['opfs', 'directory'])
 
+export const OpenDirectoryPathsSchema = v.object({
+  directory: v.array(NotePathSchema),
+  opfs: v.array(NotePathSchema),
+})
+
 export const AppSettingsSchema = v.object({
   backend: StorageBackendSchema,
   lastOpenedPath: v.nullable(NotePathSchema),
+  openDirectoryPaths: OpenDirectoryPathsSchema,
 })
 
 export const SyncStateSchema = v.object({
@@ -35,6 +41,10 @@ export type SyncState = v.InferOutput<typeof SyncStateSchema>
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   backend: 'opfs',
   lastOpenedPath: null,
+  openDirectoryPaths: {
+    directory: [],
+    opfs: [],
+  },
 }
 
 export const DEFAULT_SYNC_STATE: SyncState = {

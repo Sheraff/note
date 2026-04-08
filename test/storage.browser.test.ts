@@ -393,6 +393,10 @@ async function updateStoredAppSettings(
   updates: Partial<{
     backend: string
     lastOpenedPath: string | null
+    openDirectoryPaths: {
+      directory: string[]
+      opfs: string[]
+    }
   }>,
 ): Promise<void> {
   await page.evaluate(async (nextUpdates) => {
@@ -427,6 +431,18 @@ async function updateStoredAppSettings(
       database.close()
     }
   }, updates)
+}
+
+async function setFolderOpenState(page: Page, name: string, isOpen: boolean): Promise<void> {
+  const folderButton = page.getByRole('button', { name, exact: true })
+
+  await expect(folderButton).toBeVisible()
+
+  if ((await folderButton.getAttribute('aria-expanded')) !== `${isOpen}`) {
+    await folderButton.click()
+  }
+
+  await expect(folderButton).toHaveAttribute('aria-expanded', isOpen ? 'true' : 'false')
 }
 
 async function waitForStorageLabelToSettle(page: Page): Promise<void> {
@@ -2291,6 +2307,92 @@ test('attaches a folder and restores the last opened note after reopening the ap
 
   await expect(reopenedPage.getByRole('button', { name: pickedFolderName, exact: true })).toBeVisible()
   await expect(reopenedPage.getByRole('button', { name: 'beta.md', exact: true })).toHaveAttribute('aria-current', 'true')
+  await expectEditorToContain(reopenedPage, '# Beta note')
+})
+
+test('restores the saved folder open state after reopening the app', async ({ page }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const alphaFolder = `alpha-${runId}`
+  const betaFolder = `beta-${runId}`
+
+  await installStorageHarness(page, {
+    appOpfsRootName: `app-opfs-${runId}`,
+    pickedFolderName,
+    queryPermission: 'prompt',
+    requestPermission: 'granted',
+  })
+  await installTestUserHeader(page, `storage-page-${runId}`)
+
+  await attachPickedFolder(page, [
+    { path: `${alphaFolder}/one.md`, content: '# Alpha note\n' },
+    { path: `${betaFolder}/two.md`, content: '# Beta note\n' },
+  ])
+
+  await setFolderOpenState(page, alphaFolder, false)
+  await setFolderOpenState(page, betaFolder, true)
+  await updateStoredAppSettings(page, {
+    lastOpenedPath: `${betaFolder}/two.md`,
+  })
+
+  const reopenedPage = await reopenAppWithHarness(page, {
+    appOpfsRootName: `app-opfs-${runId}`,
+    pickedFolderName,
+    queryPermission: 'granted',
+    requestPermission: 'granted',
+  })
+
+  await waitForSyncIdle(reopenedPage)
+
+  await expect(reopenedPage.getByRole('button', { name: alphaFolder, exact: true })).toHaveAttribute('aria-expanded', 'false')
+  await expect(reopenedPage.getByRole('button', { name: betaFolder, exact: true })).toHaveAttribute('aria-expanded', 'true')
+  await expect(reopenedPage.getByRole('button', { name: 'one.md', exact: true })).toHaveCount(0)
+  await expect(reopenedPage.getByRole('button', { name: 'two.md', exact: true })).toHaveAttribute('aria-current', 'true')
+  await expectEditorToContain(reopenedPage, '# Beta note')
+})
+
+test('reveals the last opened note when no folder state is persisted', async ({ page }) => {
+  const runId = randomUUID()
+  const pickedFolderName = `picked-${runId}`
+  const alphaFolder = `alpha-${runId}`
+  const betaFolder = `beta-${runId}`
+
+  await installStorageHarness(page, {
+    appOpfsRootName: `app-opfs-${runId}`,
+    pickedFolderName,
+    queryPermission: 'prompt',
+    requestPermission: 'granted',
+  })
+  await installTestUserHeader(page, `storage-page-${runId}`)
+
+  await attachPickedFolder(page, [
+    { path: `${alphaFolder}/one.md`, content: '# Alpha note\n' },
+    { path: `${betaFolder}/two.md`, content: '# Beta note\n' },
+  ])
+
+  await setFolderOpenState(page, betaFolder, true)
+
+  await updateStoredAppSettings(page, {
+    lastOpenedPath: `${betaFolder}/two.md`,
+    openDirectoryPaths: {
+      directory: [],
+      opfs: [],
+    },
+  })
+
+  const reopenedPage = await reopenAppWithHarness(page, {
+    appOpfsRootName: `app-opfs-${runId}`,
+    pickedFolderName,
+    queryPermission: 'granted',
+    requestPermission: 'granted',
+  })
+
+  await waitForSyncIdle(reopenedPage)
+
+  await expect(reopenedPage.getByRole('button', { name: alphaFolder, exact: true })).toHaveAttribute('aria-expanded', 'false')
+  await expect(reopenedPage.getByRole('button', { name: 'one.md', exact: true })).toHaveCount(0)
+  await expect(reopenedPage.getByRole('button', { name: betaFolder, exact: true })).toHaveAttribute('aria-expanded', 'true')
+  await expect(reopenedPage.getByRole('button', { name: 'two.md', exact: true })).toHaveAttribute('aria-current', 'true')
   await expectEditorToContain(reopenedPage, '# Beta note')
 })
 

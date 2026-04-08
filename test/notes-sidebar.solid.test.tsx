@@ -2,9 +2,22 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@solidjs/testing-li
 import { createSignal } from 'solid-js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NotesSidebar } from '../web/app/NotesSidebar.tsx'
+import { getParentPath } from '../web/notes/paths.ts'
 import { buildTree, type ListedEntry } from '../web/notes/tree.ts'
 
 type NotesSidebarProps = Parameters<typeof NotesSidebar>[0]
+
+function collectPathChain(path: string): string[] {
+  const directoryPaths: string[] = []
+  let currentPath: string | null = path
+
+  while (currentPath !== null) {
+    directoryPaths.unshift(currentPath)
+    currentPath = getParentPath(currentPath)
+  }
+
+  return directoryPaths
+}
 
 const conflictLabels = {
   acceptTheirs: 'Accept file version',
@@ -17,14 +30,21 @@ function renderSidebar(
   overrides: Partial<NotesSidebarProps> = {},
   entries: ListedEntry[] = [],
 ) {
+  const defaultCurrentPath = entries.find((entry) => entry.kind === 'file')?.path ?? null
+  const defaultPersistedOpenDirectoryPaths =
+    defaultCurrentPath === null || getParentPath(defaultCurrentPath) === null
+      ? []
+      : collectPathChain(getParentPath(defaultCurrentPath)!)
+
   const props: NotesSidebarProps = {
     conflict: null,
     conflictPaths: [],
-    currentPath: null,
+    currentPath: defaultCurrentPath,
     emptyMessage: 'Attach a folder to reopen your notes.',
     fileCount: entries.filter((entry) => entry.kind === 'file').length,
     isReady: true,
     nodes: buildTree(entries),
+    persistedOpenDirectoryPaths: defaultPersistedOpenDirectoryPaths,
     unsavedPath: null,
     onAcceptTheirs: vi.fn(),
     onCreateFolder: vi.fn(async () => null),
@@ -32,6 +52,7 @@ function renderSidebar(
     onDeleteEntry: vi.fn(),
     onMoveEntry: vi.fn(async () => true),
     onOpen: vi.fn(),
+    onPersistedOpenDirectoryPathsChange: vi.fn(),
     onOpenConflict: vi.fn(),
     onRenameEntry: vi.fn(async () => null),
     onResolveInDiff: vi.fn(),
@@ -364,7 +385,9 @@ describe('NotesSidebar', () => {
 
   it('moves a dragged folder to the root when dropped on empty sidebar space', async () => {
     const { props } = renderSidebar(
-      {},
+      {
+        persistedOpenDirectoryPaths: ['projects'],
+      },
       [
         { kind: 'directory', path: 'projects' },
         { kind: 'directory', path: 'projects/source' },
@@ -457,7 +480,10 @@ describe('NotesSidebar', () => {
     vi.useFakeTimers()
 
     const { props } = renderSidebar(
-      {},
+      {
+        currentPath: null,
+        persistedOpenDirectoryPaths: ['projects'],
+      },
       [
         { kind: 'directory', path: 'projects' },
         { kind: 'directory', path: 'projects/archive' },
@@ -503,6 +529,7 @@ describe('NotesSidebar', () => {
         fileCount={1}
         isReady={true}
         nodes={nodes()}
+        persistedOpenDirectoryPaths={['projects', 'projects/source']}
         unsavedPath={null}
         onAcceptTheirs={vi.fn()}
         onCreateFolder={vi.fn(async () => null)}
@@ -510,6 +537,7 @@ describe('NotesSidebar', () => {
         onDeleteEntry={vi.fn()}
         onMoveEntry={onMoveEntry}
         onOpen={vi.fn()}
+        onPersistedOpenDirectoryPathsChange={vi.fn()}
         onOpenConflict={vi.fn()}
         onRenameEntry={vi.fn(async () => null)}
         onResolveInDiff={vi.fn()}

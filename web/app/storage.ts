@@ -12,13 +12,27 @@ import { isDirectoryPickerSupported, type NoteStorage } from '../storage/types.t
 export type StorageContext = {
   settings(): AppSettings
   setSettings(nextSettings: AppSettings): void
-  saveSettings(nextSettings: AppSettings): Promise<void>
+  saveSettings?(nextSettings: AppSettings): Promise<void>
+  updateSettings?(updater: (current: AppSettings) => AppSettings): Promise<AppSettings>
   setStorage(storage: NoteStorage | null): void
   setSyncState(syncState: SyncState): void
   setReconnectableDirectoryName(name: string | null): void
   setErrorMessage(message: string | null): void
   refreshWorkspace(preferredPath: string | null): Promise<void>
   focusEditor(): void
+}
+
+async function updateStoredSettings(
+  context: Pick<StorageContext, 'saveSettings' | 'settings' | 'updateSettings'>,
+  updater: (current: AppSettings) => AppSettings,
+): Promise<AppSettings> {
+  if (context.updateSettings !== undefined) {
+    return context.updateSettings(updater)
+  }
+
+  const nextSettings = updater(context.settings())
+  await context.saveSettings?.(nextSettings)
+  return nextSettings
 }
 
 function isAbortError(error: unknown): boolean {
@@ -28,12 +42,12 @@ function isAbortError(error: unknown): boolean {
 async function activateStorage(
   context: StorageContext,
   nextStorage: NoteStorage,
-  nextSettings: AppSettings,
+  updateSettings: (current: AppSettings) => AppSettings,
 ) {
   context.setErrorMessage(null)
   context.setReconnectableDirectoryName(null)
   context.setStorage(nextStorage)
-  await context.saveSettings(nextSettings)
+  const nextSettings = await updateStoredSettings(context, updateSettings)
   await context.refreshWorkspace(nextSettings.lastOpenedPath)
   context.focusEditor()
 }
@@ -96,10 +110,10 @@ export async function activateDirectoryHandle(context: StorageContext, handle: F
   await activateStorage(
     context,
     createDirectoryStorage(handle),
-    {
-      ...context.settings(),
+    (current) => ({
+      ...current,
       backend: 'directory',
-    },
+    }),
   )
 }
 
@@ -129,10 +143,10 @@ export async function reconnectFolder(context: StorageContext) {
   await activateStorage(
     context,
     createDirectoryStorage(handle),
-    {
-      ...context.settings(),
+    (current) => ({
+      ...current,
       backend: 'directory',
-    },
+    }),
   )
 }
 
@@ -140,9 +154,9 @@ export async function switchToOpfs(context: StorageContext) {
   await activateStorage(
     context,
     createOpfsStorage(),
-    {
-      ...context.settings(),
+    (current) => ({
+      ...current,
       backend: 'opfs',
-    },
+    }),
   )
 }
