@@ -2,6 +2,7 @@ import {
   ensureMarkdownExtension,
   getName,
   getParentPath,
+  isDotStorePath,
   joinNotePath,
   normalizeEntryName,
   normalizeRelativeCreatePath,
@@ -422,6 +423,10 @@ export async function renameEntry(context: NoteContext, entry: ListedEntry, name
   const normalizedName = normalizeEntryName(name)
 
   if (normalizedName.length === 0) {
+    return getRenameErrorMessage(entry.kind)
+  }
+
+  if (entry.kind === 'file' && isDotStorePath(normalizedName)) {
     return getRenameErrorMessage(entry.kind)
   }
 

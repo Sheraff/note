@@ -1,5 +1,5 @@
 import { hashContent } from '../notes/hashes.ts'
-import { normalizeNotePath } from '../notes/paths.ts'
+import { isDotStorePath, normalizeNotePath } from '../notes/paths.ts'
 import type { ListedEntry, NoteStorage, StoredFile } from './types.ts'
 
 function isMissingEntryError(error: unknown): boolean {
@@ -88,6 +88,11 @@ async function listDirectory(directory: FileSystemDirectoryHandle, prefix = ''):
 
   for await (const [name, handle] of directory.entries()) {
     const nextPath = prefix.length > 0 ? `${prefix}/${name}` : name
+
+    if (handle.kind === 'file' && isDotStorePath(nextPath)) {
+      continue
+    }
+
     entries.push({
       kind: handle.kind,
       path: nextPath,

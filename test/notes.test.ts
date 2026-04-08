@@ -168,6 +168,44 @@ describe('inline create errors', () => {
     expect(message).toBe('Enter a valid note name.')
   })
 
+  it('rejects renaming a file to .DS_Store', async () => {
+    const storage: NoteStorage = {
+      key: 'directory',
+      label: 'Notes',
+      async listEntries() {
+        return []
+      },
+      async listFiles() {
+        return []
+      },
+      async readTextFile() {
+        return null
+      },
+      async writeTextFile(path: string, content: string): Promise<StoredFile> {
+        return {
+          path,
+          content,
+          contentHash: 'hash',
+          updatedAt: new Date().toISOString(),
+        }
+      },
+      async deleteEntry() {},
+      async createDirectory() {},
+      renameEntry: vi.fn(),
+    }
+
+    const message = await renameEntry(
+      createMockContext(storage, () => {}, {
+        entries: [{ kind: 'file', path: 'notes/today.md' }],
+      }),
+      { kind: 'file', path: 'notes/today.md' },
+      '.DS_Store',
+    )
+
+    expect(message).toBe('Enter a valid note name.')
+    expect(storage.renameEntry).not.toHaveBeenCalled()
+  })
+
   it('returns a conflict when the target name already exists', async () => {
     const storage: NoteStorage = {
       key: 'directory',

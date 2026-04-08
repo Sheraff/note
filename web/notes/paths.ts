@@ -97,6 +97,10 @@ export function getName(path: string): string {
   return separatorIndex >= 0 ? normalized.slice(separatorIndex + 1) : normalized
 }
 
+export function isDotStorePath(path: string): boolean {
+  return getName(path) === '.DS_Store'
+}
+
 export function joinNotePath(parent: string | null, name: string): string {
   const normalizedName = normalizeNotePath(name)
 

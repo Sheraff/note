@@ -340,6 +340,33 @@ function describeStorageContract(name: string, setup: () => Promise<StorageHarne
       )
     })
 
+    it('omits .DS_Store files from listings', async () => {
+      const { root, storage } = await setup()
+
+      await writeFileToRoot(root, '.DS_Store', 'root metadata')
+      await writeFileToRoot(root, 'notes/.DS_Store', 'notes metadata')
+      await writeFileToRoot(root, 'notes/daily/.DS_Store', 'daily metadata')
+      await writeFileToRoot(root, 'notes/today.md', '# Today\n')
+      await root.getDirectoryHandle('empty', { create: true })
+
+      expect(sortEntries(await storage.listEntries())).toEqual(
+        sortEntries([
+          { kind: 'directory', path: 'empty' },
+          { kind: 'directory', path: 'notes' },
+          { kind: 'directory', path: 'notes/daily' },
+          { kind: 'file', path: 'notes/today.md' },
+        ]),
+      )
+      expect(
+        sortFiles(
+          (await storage.listFiles()).map((file) => ({
+            path: file.path,
+            content: file.content,
+          })),
+        ),
+      ).toEqual(sortFiles([{ path: 'notes/today.md', content: '# Today\n' }]))
+    })
+
     it('reads and writes normalized nested file paths', async () => {
       const { root, storage } = await setup()
 

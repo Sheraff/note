@@ -26,9 +26,10 @@
 - [x] we should be able to also drag and drop a folder, the same way we do a file
 - [x] we should persist what folder are open to the local machine (indexdb if we're already using that?) so that when i re-open the app, the same folders are open. And if nothing is already persisted, default to closed.
 - [x] SSO (see ~/web/foo/index.js for how to use our own internal sso, and ~/web/foo/package.json for how to install it)
-- [ ] We need to make a special case for `.DS_Store` files so they are *never* synced, visible, or anything. It should behave as if those files did not even exist.
+- [x] We need to make a special case for `.DS_Store` files so they are *never* synced, visible, or anything. It should behave as if those files did not even exist.
+- [ ] every sync sends back at least 1 object per file that has ever existed. This can be very wasteful. The client should send some sort of "last seen at" date, and the server only responds with "changes since your last seen at date". Also, why are all files present in IndexedDB?
 - [ ] we will need to figure out how to support images (and other attachments)
-- [ ] every sync sends back at least 1 object per file that has ever existed. This can be very wasteful. The client should send some sort of "last seen at" date, and the server only responds with "changes since your last seen at date"
+- [ ] we fixed this already, but it still happens that the cursor gets reset to the top of the file if we're typing while syncs happen.
 - [ ] if we added a "command palette", what could we put in it? i like the idea
 
 
