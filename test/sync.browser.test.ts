@@ -348,8 +348,21 @@ async function createFolderFromSidebar(page: Page, name: string): Promise<string
   return name
 }
 
-async function ensureFileIsOpen(page: Page, fileName: string): Promise<void> {
+async function ensureFileIsOpen(page: Page, filePath: string): Promise<void> {
+  const fileName = filePath.split('/').pop() ?? filePath
   const noteButton = page.getByRole('button', { name: fileName, exact: true })
+
+  if ((await noteButton.count()) === 0) {
+    for (const segment of filePath.split('/').slice(0, -1)) {
+      const directoryButton = page.getByRole('button', { name: segment, exact: true })
+
+      await expect(directoryButton).toBeVisible()
+
+      if ((await directoryButton.getAttribute('aria-expanded')) !== 'true') {
+        await directoryButton.click()
+      }
+    }
+  }
 
   await expect(noteButton).toBeVisible()
 
@@ -812,7 +825,7 @@ test('blocks create note, create folder, rename, and delete when flushPendingSav
 
     try {
       await setupSyncedWorkspace(page, request, options.files, userId)
-      await ensureFileIsOpen(page, options.openPath.split('/').pop() ?? options.openPath)
+      await ensureFileIsOpen(page, options.openPath)
       await expectEditorToContain(page, openFile.content.trim())
 
       await writeOpfsFile(page, options.openPath, options.diskContent)
@@ -937,7 +950,7 @@ test('still syncs a flushed save when create and rename attempts fail validation
 
     try {
       await setupSyncedWorkspace(page, request, options.files, userId)
-      await ensureFileIsOpen(page, options.openPath.split('/').pop() ?? options.openPath)
+      await ensureFileIsOpen(page, options.openPath)
 
       const syncRequests = await countSyncRequestsDuring(page, async () => {
         await replaceEditorContent(page, options.localDraft)
@@ -1005,7 +1018,7 @@ test('still syncs a flushed save when create and rename attempts fail validation
       await page.locator('.tree-row-editor input').press('Enter')
     },
     async assertFailedMutation(page) {
-      await expect(page.locator('.tree-row-editor input')).toHaveValue('open.md')
+      await expect(page.locator('.tree-row-editor input')).toHaveValue('bad/name.md')
       await expect(page.getByRole('button', { name: 'bad/name.md', exact: true })).toHaveCount(0)
     },
   })
@@ -1024,7 +1037,7 @@ test('still syncs a flushed save when create and rename attempts fail validation
       await page.locator('.tree-row-editor input').press('Enter')
     },
     async assertFailedMutation(page) {
-      await expect(page.locator('.tree-row-editor input')).toHaveValue('open.md')
+      await expect(page.locator('.tree-row-editor input')).toHaveValue('taken.md')
       await expect(page.getByRole('button', { name: 'taken.md', exact: true })).toBeVisible()
     },
   })
@@ -1037,7 +1050,7 @@ test('still syncs a flushed save when renaming a note to the same name', async (
   const updatedContent = '# Saved before same-name rename\n'
 
   await setupSyncedWorkspace(page, request, [{ path, content: '# Base same-name rename\n' }], userId)
-  await ensureFileIsOpen(page, 'open.md')
+  await ensureFileIsOpen(page, path)
 
   const syncRequests = await countSyncRequestsDuring(page, async () => {
     await replaceEditorContent(page, updatedContent)
@@ -1067,7 +1080,7 @@ test('still syncs a flushed save when delete is cancelled', async ({ page, reque
     ],
     userId,
   )
-  await ensureFileIsOpen(page, 'open.md')
+  await ensureFileIsOpen(page, openPath)
 
   const syncRequests = await countSyncRequestsDuring(page, async () => {
     await replaceEditorContent(page, updatedContent)

@@ -21,6 +21,7 @@ export type FlushPendingSaveOptions = {
 export type FlushPendingSaveResult = SaveCurrentNoteResult | { status: 'skipped' }
 
 export type SyncContext = {
+  userId(): string
   blockedSyncPaths(): string[]
   storage(): NoteStorage | null
   syncState(): SyncState
@@ -46,7 +47,7 @@ function mergeSyncMode(left: SyncMode | null, right: SyncMode): SyncMode {
 
 async function persistSyncState(context: SyncContext, syncState: SyncState): Promise<void> {
   context.setSyncState(syncState)
-  await setSyncState(syncState)
+  await setSyncState(context.userId(), syncState)
 }
 
 function createSyncNoteConflict(path: string, mineFile: StoredFile | null, theirsFile: StoredFile | null): NoteConflict {

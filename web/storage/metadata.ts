@@ -18,6 +18,10 @@ const APP_SETTINGS_KEY = 'app-settings'
 const DIRECTORY_HANDLE_KEY = 'directory-handle'
 const SYNC_STATE_KEY = 'sync-state'
 
+function getScopedKey(userId: string, key: string): string {
+  return `${userId}:${key}`
+}
+
 function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => {
@@ -95,8 +99,8 @@ async function writeValue(storeName: string, key: string, value: unknown): Promi
   database.close()
 }
 
-export async function getAppSettings(): Promise<AppSettings> {
-  const value = await readValue(SETTINGS_STORE, APP_SETTINGS_KEY)
+export async function getAppSettings(userId: string): Promise<AppSettings> {
+  const value = await readValue(SETTINGS_STORE, getScopedKey(userId, APP_SETTINGS_KEY))
 
   if (value === undefined) {
     return DEFAULT_APP_SETTINGS
@@ -118,12 +122,12 @@ export async function getAppSettings(): Promise<AppSettings> {
   })
 }
 
-export async function setAppSettings(settings: AppSettings): Promise<void> {
-  await writeValue(SETTINGS_STORE, APP_SETTINGS_KEY, v.parse(AppSettingsSchema, settings))
+export async function setAppSettings(userId: string, settings: AppSettings): Promise<void> {
+  await writeValue(SETTINGS_STORE, getScopedKey(userId, APP_SETTINGS_KEY), v.parse(AppSettingsSchema, settings))
 }
 
-export async function getDirectoryHandle(): Promise<FileSystemDirectoryHandle | null> {
-  const value = await readValue(HANDLES_STORE, DIRECTORY_HANDLE_KEY)
+export async function getDirectoryHandle(userId: string): Promise<FileSystemDirectoryHandle | null> {
+  const value = await readValue(HANDLES_STORE, getScopedKey(userId, DIRECTORY_HANDLE_KEY))
 
   if (value === undefined) {
     return null
@@ -132,12 +136,12 @@ export async function getDirectoryHandle(): Promise<FileSystemDirectoryHandle | 
   return v.parse(v.nullable(DirectoryHandleSchema), value)
 }
 
-export async function setDirectoryHandle(handle: FileSystemDirectoryHandle | null): Promise<void> {
-  await writeValue(HANDLES_STORE, DIRECTORY_HANDLE_KEY, v.parse(v.nullable(DirectoryHandleSchema), handle))
+export async function setDirectoryHandle(userId: string, handle: FileSystemDirectoryHandle | null): Promise<void> {
+  await writeValue(HANDLES_STORE, getScopedKey(userId, DIRECTORY_HANDLE_KEY), v.parse(v.nullable(DirectoryHandleSchema), handle))
 }
 
-export async function getSyncState(): Promise<SyncState> {
-  const value = await readValue(SYNC_STORE, SYNC_STATE_KEY)
+export async function getSyncState(userId: string): Promise<SyncState> {
+  const value = await readValue(SYNC_STORE, getScopedKey(userId, SYNC_STATE_KEY))
 
   if (value === undefined) {
     return DEFAULT_SYNC_STATE
@@ -146,6 +150,6 @@ export async function getSyncState(): Promise<SyncState> {
   return v.parse(SyncStateSchema, value)
 }
 
-export async function setSyncState(syncState: SyncState): Promise<void> {
-  await writeValue(SYNC_STORE, SYNC_STATE_KEY, v.parse(SyncStateSchema, syncState))
+export async function setSyncState(userId: string, syncState: SyncState): Promise<void> {
+  await writeValue(SYNC_STORE, getScopedKey(userId, SYNC_STATE_KEY), v.parse(SyncStateSchema, syncState))
 }

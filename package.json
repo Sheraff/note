@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "node --watch --watch-path=server --watch-path=vite.config.ts --watch-path=index.html --watch-preserve-output server/index.ts --dev",
     "build": "vite build --app",
-    "start": "node dist/server/server.js",
+    "start": "NODE_ENV=production node dist/server/server.js",
     "check": "tsc -b",
     "test": "pnpm run test:unit && pnpm run test:browser",
     "test:unit": "vitest run",
@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@hono/node-server": "1.19.12",
+    "@sso/client": "github:sheraff/sso#main&path:/client",
     "@tanstack/hotkeys": "0.7.1",
     "@vscode/codicons": "0.0.45",
     "hono": "4.12.10",

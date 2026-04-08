@@ -354,8 +354,8 @@ async function deletePickedFolderEntry(page: Page, path: string): Promise<void> 
   }, path)
 }
 
-async function readStoredAppSettings(page: Page): Promise<{ backend: string; lastOpenedPath: string | null } | null> {
-  return page.evaluate(async () => {
+async function readStoredAppSettings(page: Page, userId: string): Promise<{ backend: string; lastOpenedPath: string | null } | null> {
+  return page.evaluate(async (currentUserId) => {
     const request = indexedDB.open('note-metadata', 1)
 
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -367,7 +367,7 @@ async function readStoredAppSettings(page: Page): Promise<{ backend: string; las
       const transaction = database.transaction('settings', 'readonly')
       const store = transaction.objectStore('settings')
       const value = await new Promise<unknown>((resolve, reject) => {
-        const getRequest = store.get('app-settings')
+        const getRequest = store.get(`${currentUserId}:app-settings`)
         getRequest.onsuccess = () => resolve(getRequest.result)
         getRequest.onerror = () => reject(getRequest.error ?? new Error('Unable to read app settings'))
       })
@@ -385,11 +385,12 @@ async function readStoredAppSettings(page: Page): Promise<{ backend: string; las
     } finally {
       database.close()
     }
-  })
+  }, userId)
 }
 
 async function updateStoredAppSettings(
   page: Page,
+  userId: string,
   updates: Partial<{
     backend: string
     lastOpenedPath: string | null
@@ -399,7 +400,7 @@ async function updateStoredAppSettings(
     }
   }>,
 ): Promise<void> {
-  await page.evaluate(async (nextUpdates) => {
+  await page.evaluate(async ({ currentUserId, nextUpdates }) => {
     const request = indexedDB.open('note-metadata', 1)
 
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -411,7 +412,7 @@ async function updateStoredAppSettings(
       const transaction = database.transaction('settings', 'readwrite')
       const store = transaction.objectStore('settings')
       const currentValue = await new Promise<Record<string, unknown>>((resolve, reject) => {
-        const getRequest = store.get('app-settings')
+        const getRequest = store.get(`${currentUserId}:app-settings`)
         getRequest.onsuccess = () => resolve((getRequest.result as Record<string, unknown> | undefined) ?? {})
         getRequest.onerror = () => reject(getRequest.error ?? new Error('Unable to read app settings'))
       })
@@ -422,7 +423,7 @@ async function updateStoredAppSettings(
             ...currentValue,
             ...nextUpdates,
           },
-          'app-settings',
+          `${currentUserId}:app-settings`,
         )
         putRequest.onsuccess = () => resolve()
         putRequest.onerror = () => reject(putRequest.error ?? new Error('Unable to write app settings'))
@@ -430,7 +431,7 @@ async function updateStoredAppSettings(
     } finally {
       database.close()
     }
-  }, updates)
+  }, { currentUserId: userId, nextUpdates: updates })
 }
 
 async function setFolderOpenState(page: Page, name: string, isOpen: boolean): Promise<void> {
@@ -1623,6 +1624,12 @@ test('moves a folder into another folder by dragging it onto the folder', async 
     await expect.poll(async () => await readPickedFolderFile(page, sourcePath)).toBe(null)
     await expect.poll(async () => await readPickedFolderFile(page, targetPath)).toBe('# Drag me\n')
     await expect.poll(async () => await readPickedFolderFile(page, `archive/keep-${runId}.md`)).toBe('# Keep\n')
+    const archiveButton = page.getByRole('button', { name: 'archive', exact: true })
+
+    if ((await archiveButton.getAttribute('aria-expanded')) !== 'true') {
+      await archiveButton.click()
+    }
+
     await expect(page.getByRole('button', { name: sourceFolderName, exact: true })).toHaveAttribute('aria-expanded', 'false')
     await waitForSyncIdle(page)
   } finally {
@@ -1665,6 +1672,12 @@ test('keeps a moved folder open when it started open', async ({ browser }) => {
 
     await expect.poll(async () => await readPickedFolderFile(page, sourcePath)).toBe(null)
     await expect.poll(async () => await readPickedFolderFile(page, targetPath)).toBe('# Drag me\n')
+    const archiveButton = page.getByRole('button', { name: 'archive', exact: true })
+
+    if ((await archiveButton.getAttribute('aria-expanded')) !== 'true') {
+      await archiveButton.click()
+    }
+
     await expect(page.getByRole('button', { name: sourceFolderName, exact: true })).toHaveAttribute('aria-expanded', 'true')
     await expect(page.getByRole('button', { name: `move-me-${runId}.md`, exact: true })).toBeVisible()
     await waitForSyncIdle(page)
@@ -2192,7 +2205,8 @@ test('falls back to the remaining note on startup when the saved path is missing
   const pickedFolderName = `picked-${runId}`
   const remainingNotePath = `missing-${runId}/keep-${runId}.md`
   const missingNotePath = `missing-${runId}/gone-${runId}.md`
-  const page = await createIsolatedStoragePage(browser, `storage-missing-${runId}`)
+  const userId = `storage-missing-${runId}`
+  const page = await createIsolatedStoragePage(browser, userId)
 
   try {
     await installStorageHarness(page, {
@@ -2211,15 +2225,15 @@ test('falls back to the remaining note on startup when the saved path is missing
     await expectEditorToContain(page, '# Keep on startup')
     await ensureFileIsOpen(page, `gone-${runId}.md`)
     await expectEditorToContain(page, '# Open me first')
-    await expect.poll(async () => (await readStoredAppSettings(page))?.lastOpenedPath).toBe(missingNotePath)
+    await expect.poll(async () => (await readStoredAppSettings(page, userId))?.lastOpenedPath).toBe(missingNotePath)
 
     await ensureFileIsOpen(page, `keep-${runId}.md`)
     await expectEditorToContain(page, '# Keep on startup')
-    await updateStoredAppSettings(page, {
+    await updateStoredAppSettings(page, userId, {
       backend: 'directory',
       lastOpenedPath: missingNotePath,
     })
-    await expect.poll(async () => (await readStoredAppSettings(page))?.lastOpenedPath).toBe(missingNotePath)
+    await expect.poll(async () => (await readStoredAppSettings(page, userId))?.lastOpenedPath).toBe(missingNotePath)
 
     await deletePickedFolderEntry(page, missingNotePath)
     await expect.poll(async () => await readPickedFolderFile(page, remainingNotePath)).toBe('# Keep on startup\n')
@@ -2237,10 +2251,37 @@ test('falls back to the remaining note on startup when the saved path is missing
     await expect(reopenedPage.getByRole('button', { name: `gone-${runId}.md`, exact: true })).toHaveCount(0)
     await expect(reopenedPage.getByRole('button', { name: `keep-${runId}.md`, exact: true })).toHaveAttribute('aria-current', 'true')
     await expectEditorToContain(reopenedPage, '# Keep on startup')
-    await expect.poll(async () => (await readStoredAppSettings(reopenedPage))?.lastOpenedPath).toBe(remainingNotePath)
+    await expect.poll(async () => (await readStoredAppSettings(reopenedPage, userId))?.lastOpenedPath).toBe(remainingNotePath)
   } finally {
     await page.context().close()
   }
+})
+
+test('stores app settings separately for each authenticated user', async ({ page }) => {
+  const runId = randomUUID()
+  const userA = `storage-user-a-${runId}`
+  const userB = `storage-user-b-${runId}`
+
+  await installStorageHarness(page, {
+    appOpfsRootName: `app-opfs-${runId}`,
+    pickedFolderName: `picked-${runId}`,
+    queryPermission: 'prompt',
+    requestPermission: 'granted',
+  })
+  await installTestUserHeader(page, userA)
+  await page.goto('/')
+  await expect(page).toHaveTitle('Note')
+  await waitForSyncIdle(page)
+
+  await updateStoredAppSettings(page, userA, {
+    lastOpenedPath: `notes/${runId}-a.md`,
+  })
+  await updateStoredAppSettings(page, userB, {
+    lastOpenedPath: `notes/${runId}-b.md`,
+  })
+
+  await expect.poll(async () => (await readStoredAppSettings(page, userA))?.lastOpenedPath).toBe(`notes/${runId}-a.md`)
+  await expect.poll(async () => (await readStoredAppSettings(page, userB))?.lastOpenedPath).toBe(`notes/${runId}-b.md`)
 })
 
 test('shows the unsupported-browser attach error and keeps the OPFS workspace active', async ({ browser }) => {
@@ -2315,6 +2356,7 @@ test('restores the saved folder open state after reopening the app', async ({ pa
   const pickedFolderName = `picked-${runId}`
   const alphaFolder = `alpha-${runId}`
   const betaFolder = `beta-${runId}`
+  const userId = `storage-page-${runId}`
 
   await installStorageHarness(page, {
     appOpfsRootName: `app-opfs-${runId}`,
@@ -2322,7 +2364,7 @@ test('restores the saved folder open state after reopening the app', async ({ pa
     queryPermission: 'prompt',
     requestPermission: 'granted',
   })
-  await installTestUserHeader(page, `storage-page-${runId}`)
+  await installTestUserHeader(page, userId)
 
   await attachPickedFolder(page, [
     { path: `${alphaFolder}/one.md`, content: '# Alpha note\n' },
@@ -2331,7 +2373,7 @@ test('restores the saved folder open state after reopening the app', async ({ pa
 
   await setFolderOpenState(page, alphaFolder, false)
   await setFolderOpenState(page, betaFolder, true)
-  await updateStoredAppSettings(page, {
+  await updateStoredAppSettings(page, userId, {
     lastOpenedPath: `${betaFolder}/two.md`,
   })
 
@@ -2356,6 +2398,7 @@ test('reveals the last opened note when no folder state is persisted', async ({ 
   const pickedFolderName = `picked-${runId}`
   const alphaFolder = `alpha-${runId}`
   const betaFolder = `beta-${runId}`
+  const userId = `storage-page-${runId}`
 
   await installStorageHarness(page, {
     appOpfsRootName: `app-opfs-${runId}`,
@@ -2363,7 +2406,7 @@ test('reveals the last opened note when no folder state is persisted', async ({ 
     queryPermission: 'prompt',
     requestPermission: 'granted',
   })
-  await installTestUserHeader(page, `storage-page-${runId}`)
+  await installTestUserHeader(page, userId)
 
   await attachPickedFolder(page, [
     { path: `${alphaFolder}/one.md`, content: '# Alpha note\n' },
@@ -2372,7 +2415,7 @@ test('reveals the last opened note when no folder state is persisted', async ({ 
 
   await setFolderOpenState(page, betaFolder, true)
 
-  await updateStoredAppSettings(page, {
+  await updateStoredAppSettings(page, userId, {
     lastOpenedPath: `${betaFolder}/two.md`,
     openDirectoryPaths: {
       directory: [],

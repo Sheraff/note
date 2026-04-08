@@ -67,6 +67,14 @@ export const HealthResponseSchema = v.object({
   ok: v.boolean(),
 })
 
+export const SessionResponseSchema = v.object({
+  userId: v.string(),
+})
+
+export const AuthRedirectResponseSchema = v.object({
+  redirect: v.string(),
+})
+
 export const ManifestResponseSchema = v.object({
   files: v.array(ManifestEntrySchema),
 })
@@ -82,3 +90,5 @@ export type ManifestEntry = v.InferOutput<typeof ManifestEntrySchema>
 export type SyncChange = v.InferOutput<typeof SyncChangeSchema>
 export type SyncConflict = v.InferOutput<typeof SyncConflictSchema>
 export type PushRequest = v.InferOutput<typeof PushRequestSchema>
+export type SessionResponse = v.InferOutput<typeof SessionResponseSchema>
+export type AuthRedirectResponse = v.InferOutput<typeof AuthRedirectResponseSchema>

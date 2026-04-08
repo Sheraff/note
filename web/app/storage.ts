@@ -10,6 +10,7 @@ import { createOpfsStorage } from '../storage/opfs.ts'
 import { isDirectoryPickerSupported, type NoteStorage } from '../storage/types.ts'
 
 export type StorageContext = {
+  userId(): string
   settings(): AppSettings
   setSettings(nextSettings: AppSettings): void
   saveSettings?(nextSettings: AppSettings): Promise<void>
@@ -53,8 +54,9 @@ async function activateStorage(
 }
 
 export async function bootstrapWorkspace(context: StorageContext) {
-  const savedSettings = await getAppSettings()
-  const savedSyncState = await getSyncState()
+  const userId = context.userId()
+  const savedSettings = await getAppSettings(userId)
+  const savedSyncState = await getSyncState(userId)
 
   context.setSettings(savedSettings)
   context.setSyncState(savedSyncState)
@@ -66,7 +68,7 @@ export async function bootstrapWorkspace(context: StorageContext) {
     return
   }
 
-  const handle = await getDirectoryHandle()
+  const handle = await getDirectoryHandle(userId)
 
   if (handle !== null && (await queryDirectoryPermission(handle)) === 'granted') {
     context.setStorage(createDirectoryStorage(handle))
@@ -106,7 +108,7 @@ export async function pickFolderHandle(
 }
 
 export async function activateDirectoryHandle(context: StorageContext, handle: FileSystemDirectoryHandle) {
-  await setDirectoryHandle(handle)
+  await setDirectoryHandle(context.userId(), handle)
   await activateStorage(
     context,
     createDirectoryStorage(handle),
@@ -130,7 +132,7 @@ export async function attachFolder(context: StorageContext): Promise<boolean> {
 }
 
 export async function reconnectFolder(context: StorageContext) {
-  const handle = await getDirectoryHandle()
+  const handle = await getDirectoryHandle(context.userId())
 
   if (handle === null) {
     throw new Error('No saved folder is available to reconnect')

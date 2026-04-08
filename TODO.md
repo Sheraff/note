@@ -25,7 +25,8 @@
 - [x] we should be able to drag a file to move it to a different folder, droping on a folder moves it there, hovering (while dragging) on a folder for 1 second should open the folder, and dropping on empty space should move it to the root
 - [x] we should be able to also drag and drop a folder, the same way we do a file
 - [x] we should persist what folder are open to the local machine (indexdb if we're already using that?) so that when i re-open the app, the same folders are open. And if nothing is already persisted, default to closed.
-- [ ] SSO (see ~/web/foo/index.js for how to use our own internal sso, and ~/web/foo/package.json for how to install it)
+- [x] SSO (see ~/web/foo/index.js for how to use our own internal sso, and ~/web/foo/package.json for how to install it)
+- [ ] We need to make a special case for `.DS_Store` files so they are *never* synced, visible, or anything. It should behave as if those files did not even exist.
 - [ ] we will need to figure out how to support images (and other attachments)
 - [ ] every sync sends back at least 1 object per file that has ever existed. This can be very wasteful. The client should send some sort of "last seen at" date, and the server only responds with "changes since your last seen at date"
 - [ ] if we added a "command palette", what could we put in it? i like the idea

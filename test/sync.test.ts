@@ -33,6 +33,7 @@ function createSyncContext(options: {
   syncState: SyncState
 }) {
   return {
+    userId: () => 'test-user',
     blockedSyncPaths: () => options.blockedSyncPaths ?? [],
     storage: () => options.storage,
     syncState: () => options.syncState,

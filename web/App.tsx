@@ -34,6 +34,7 @@ import {
   type FlushPendingSaveResult,
   type SyncContext,
 } from './app/sync.ts'
+import { createApiClient, isAuthRedirectError } from './api.ts'
 import type { MonacoController } from './editor/monaco.ts'
 import { createConflictCopyPath } from './notes/paths.ts'
 import { buildTree } from './notes/tree.ts'
@@ -56,6 +57,7 @@ const ACTIVE_CONFLICT_MESSAGE = 'Resolve the open note conflict before continuin
 
 type EditorMode = 'plain' | 'diff'
 type PersistResult = SaveCurrentNoteResult | FlushPendingSaveResult
+const api = createApiClient()
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -109,6 +111,7 @@ function App() {
   const [sidebarWidth, setSidebarWidth] = createSignal(300)
 
   const [hasBootstrapped, setHasBootstrapped] = createSignal(false)
+  const [userId, setUserId] = createSignal<string | null>(null)
   const [storage, setStorage] = createSignal<NoteStorage | null>(null)
   const [reconnectableDirectoryName, setReconnectableDirectoryName] = createSignal<string | null>(null)
   const [settings, setSettings] = createSignal<AppSettings>(DEFAULT_APP_SETTINGS)
@@ -211,7 +214,21 @@ function App() {
   })
   const conflictPaths = createMemo(() => blockedSyncPaths())
 
+  function requireUserId(): string {
+    const currentUserId = userId()
+
+    if (currentUserId === null) {
+      throw new Error('User session is not ready yet.')
+    }
+
+    return currentUserId
+  }
+
   function reportError(error: unknown) {
+    if (isAuthRedirectError(error)) {
+      return
+    }
+
     setErrorMessage(getErrorMessage(error))
   }
 
@@ -306,7 +323,7 @@ function App() {
       const nextSettings = updater(settings())
 
       setSettings(nextSettings)
-      await setAppSettings(nextSettings)
+      await setAppSettings(requireUserId(), nextSettings)
       return nextSettings
     })
 
@@ -395,6 +412,7 @@ function App() {
   }
 
   const storageContext: StorageContext = {
+    userId: requireUserId,
     settings,
     setSettings,
     updateSettings,
@@ -411,6 +429,7 @@ function App() {
   }
 
   const syncContext: SyncContext = {
+    userId: requireUserId,
     blockedSyncPaths,
     storage,
     syncState,
@@ -866,7 +885,7 @@ function App() {
 
       if (currentStorage?.key === 'opfs' && !didTransfer && targetEntries.length === 0) {
         setSyncStateSignal(DEFAULT_SYNC_STATE)
-        await persistSyncState(DEFAULT_SYNC_STATE)
+        await persistSyncState(requireUserId(), DEFAULT_SYNC_STATE)
       }
 
       await requestSync({ mode: 'full' })
@@ -1033,8 +1052,11 @@ function App() {
     }, AUTO_SYNC_INTERVAL_MS)
 
     void mountEditor('plain').catch(reportError)
-    void bootstrapWorkspace(storageContext)
-      .then(async () => {
+    void api.getSession()
+      .then(async (session) => {
+        setUserId(session.userId)
+        await bootstrapWorkspace(storageContext)
+
         if (storage() !== null) {
           await requestSync({ mode: 'full' })
         }

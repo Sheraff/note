@@ -3,6 +3,8 @@ import { DEFAULT_APP_SETTINGS, type AppSettings, type SyncState } from '../web/s
 import type { NoteStorage } from '../web/storage/types.ts'
 import { attachFolder, bootstrapWorkspace, reconnectFolder, type StorageContext } from '../web/app/storage.ts'
 
+const TEST_USER_ID = 'test-user'
+
 function createSettings(overrides: Partial<AppSettings>): AppSettings {
   return {
     ...DEFAULT_APP_SETTINGS,
@@ -78,6 +80,7 @@ function createStorage(key: NoteStorage['key'], label: string): NoteStorage {
 
 function createContext(settings: AppSettings): StorageContext {
   return {
+    userId: vi.fn(() => TEST_USER_ID),
     settings: vi.fn(() => settings),
     setSettings: vi.fn(),
     saveSettings: vi.fn(async () => {}),
@@ -518,6 +521,9 @@ describe('workspace storage bootstrap', () => {
 
     await bootstrapWorkspace(context)
 
+    expect(getAppSettingsMock).toHaveBeenCalledWith(TEST_USER_ID)
+    expect(getSyncStateMock).toHaveBeenCalledWith(TEST_USER_ID)
+    expect(getDirectoryHandleMock).toHaveBeenCalledWith(TEST_USER_ID)
     expect(context.setSettings).toHaveBeenCalledWith(settings)
     expect(context.setSyncState).toHaveBeenCalledWith(syncState)
     expect(queryDirectoryPermissionMock).toHaveBeenCalledWith(handle)
@@ -543,6 +549,9 @@ describe('workspace storage bootstrap', () => {
 
     await bootstrapWorkspace(context)
 
+    expect(getAppSettingsMock).toHaveBeenCalledWith(TEST_USER_ID)
+    expect(getSyncStateMock).toHaveBeenCalledWith(TEST_USER_ID)
+    expect(getDirectoryHandleMock).toHaveBeenCalledWith(TEST_USER_ID)
     expect(queryDirectoryPermissionMock).toHaveBeenCalledWith(handle)
     expect(context.setStorage).toHaveBeenCalledWith(null)
     expect(context.setReconnectableDirectoryName).toHaveBeenLastCalledWith('Notes')
@@ -566,6 +575,9 @@ describe('workspace storage bootstrap', () => {
 
     await bootstrapWorkspace(context)
 
+    expect(getAppSettingsMock).toHaveBeenCalledWith(TEST_USER_ID)
+    expect(getSyncStateMock).toHaveBeenCalledWith(TEST_USER_ID)
+    expect(getDirectoryHandleMock).toHaveBeenCalledWith(TEST_USER_ID)
     expect(queryDirectoryPermissionMock).toHaveBeenCalledWith(handle)
     expect(context.setStorage).toHaveBeenCalledWith(null)
     expect(context.setReconnectableDirectoryName).toHaveBeenLastCalledWith('Notes')
@@ -602,7 +614,7 @@ describe('workspace attach', () => {
 
     expect(pickDirectoryHandleMock).toHaveBeenCalledTimes(1)
     expect(requestDirectoryPermissionMock).toHaveBeenCalledWith(handle)
-    expect(setDirectoryHandleMock).toHaveBeenCalledWith(handle)
+    expect(setDirectoryHandleMock).toHaveBeenCalledWith(TEST_USER_ID, handle)
     expect(createDirectoryStorageMock).toHaveBeenCalledWith(handle)
     expect(context.setErrorMessage).toHaveBeenCalledWith(null)
     expect(context.setReconnectableDirectoryName).toHaveBeenCalledWith(null)
@@ -651,6 +663,7 @@ describe('workspace reconnect', () => {
     await reconnectFolder(context)
 
     expect(getDirectoryHandleMock).toHaveBeenCalledTimes(1)
+    expect(getDirectoryHandleMock).toHaveBeenCalledWith(TEST_USER_ID)
     expect(requestDirectoryPermissionMock).toHaveBeenCalledWith(handle)
     expect(createDirectoryStorageMock).toHaveBeenCalledWith(handle)
     expect(context.setErrorMessage).toHaveBeenCalledWith(null)
