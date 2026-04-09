@@ -1,4 +1,4 @@
-import type { ListedEntry, NoteStorage } from './types.ts'
+import { readStoredFile, toWriteFileInput, writeStoredFile, type ListedEntry, type NoteStorage } from './types.ts'
 
 export type StorageTransferConflict = {
   path: string
@@ -25,8 +25,8 @@ function compareEntriesForRemoval(left: ListedEntry, right: ListedEntry): number
   return compareEntryPaths(right, left)
 }
 
-async function readRequiredTextFile(storage: NoteStorage, path: string, action: string) {
-  const file = await storage.readTextFile(path)
+async function readRequiredFile(storage: NoteStorage, path: string, action: string) {
+  const file = await readStoredFile(storage, path)
 
   if (file === null) {
     throw new Error(`Unable to read ${path} before ${action}`)
@@ -58,8 +58,8 @@ export async function getStorageTransferConflicts(
     }
 
     if (sourceEntry.kind === 'file' && destinationKind === 'file') {
-      const sourceFile = await readRequiredTextFile(source, sourceEntry.path, 'transfer conflict detection')
-      const destinationFile = await readRequiredTextFile(destination, sourceEntry.path, 'transfer conflict detection')
+      const sourceFile = await readRequiredFile(source, sourceEntry.path, 'transfer conflict detection')
+      const destinationFile = await readRequiredFile(destination, sourceEntry.path, 'transfer conflict detection')
 
       if (sourceFile.contentHash === destinationFile.contentHash) {
         continue
@@ -87,13 +87,13 @@ export async function copyStorageEntries(
     if (entry.kind === 'directory') {
       await destination.createDirectory(entry.path)
       continue
+      }
+
+      const file = await readRequiredFile(source, entry.path, 'transfer')
+
+      await writeStoredFile(destination, entry.path, toWriteFileInput(file))
     }
-
-    const file = await readRequiredTextFile(source, entry.path, 'transfer')
-
-    await destination.writeTextFile(entry.path, file.content)
   }
-}
 
 export async function replaceStorageEntries(
   source: NoteStorage,

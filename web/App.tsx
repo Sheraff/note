@@ -1,5 +1,5 @@
 import { createMultiHotkeyHandler } from '@tanstack/hotkeys'
-import { Show, createMemo, createSignal, onCleanup, onMount, type JSX } from 'solid-js'
+import { Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, type JSX } from 'solid-js'
 import { EditorPane } from './app/EditorPane.tsx'
 import type { EntryEditorSubmitSource } from './app/FileTree.tsx'
 import { NotesSidebar } from './app/NotesSidebar.tsx'
@@ -11,7 +11,7 @@ import {
   deleteEntry,
   loadNote,
   moveEntry,
-  refreshWorkspace,
+  refreshWorkspace as refreshWorkspaceState,
   renameEntry,
   saveCurrentNote,
   type NoteConflict,
@@ -39,6 +39,8 @@ import type { MonacoController } from './editor/monaco.ts'
 import { createConflictCopyPath } from './notes/paths.ts'
 import { buildTree } from './notes/tree.ts'
 import { DEFAULT_APP_SETTINGS, DEFAULT_SYNC_STATE, type AppSettings, type SyncState } from './schemas.ts'
+import { getStoredFileViewKind } from './storage/file-classify.ts'
+import { getFileTypeLabel } from './storage/file-paths.ts'
 import { setAppSettings, setSyncState as persistSyncState } from './storage/metadata.ts'
 import { createDirectoryStorage } from './storage/file-system-access.ts'
 import { createOpfsStorage } from './storage/opfs.ts'
@@ -48,7 +50,15 @@ import {
   replaceStorageEntries,
   type StorageTransferConflict,
 } from './storage/transfer.ts'
-import type { ListedEntry, NoteStorage, StoredFile } from './storage/types.ts'
+import {
+  isTextStoredFile,
+  readStoredFile,
+  toWriteFileInput,
+  writeStoredFile,
+  type ListedEntry,
+  type NoteStorage,
+  type StoredFile,
+} from './storage/types.ts'
 import './App.css'
 
 const AUTO_SYNC_COOLDOWN_MS = 10_000
@@ -142,6 +152,10 @@ function App() {
       return draftContent().length > 0
     }
 
+    if (!isTextStoredFile(snapshot)) {
+      return false
+    }
+
     return draftContent() !== snapshot.content
   })
   const hasKnownLocalChangesSinceSync = createMemo(() => hasUnsyncedWorkspaceChanges() || hasUnsavedDraftChanges())
@@ -183,6 +197,10 @@ function App() {
     return 'Create a note to start writing.'
   })
   const isOpfsActive = createMemo(() => settings().backend === 'opfs')
+  const currentFileViewKind = createMemo(() => {
+    const file = loadedFileSnapshot()
+    return file === null ? null : getStoredFileViewKind(file)
+  })
   const diffSourceVersionLabel = createMemo(() => {
     const conflict = noteConflictSignal()
 
@@ -205,9 +223,10 @@ function App() {
     return {
       labels: {
         acceptTheirs,
-        resolveInDiff: 'Resolve conflicting changes',
-        saveMine: 'Save my current draft',
-        saveMineSeparately: 'Save my current draft separately',
+        resolveInDiff: conflict.kind === 'text' ? 'Resolve conflicting changes' : null,
+        saveMine: conflict.kind === 'text' ? 'Save my current draft' : 'Keep my local version',
+        saveMineSeparately:
+          conflict.kind === 'text' ? 'Save my current draft separately' : 'Save my local version separately',
       } satisfies ConflictActionLabels,
       message,
       path: conflict.path,
@@ -237,7 +256,7 @@ function App() {
   function setNoteConflict(nextConflict: NoteConflict | null) {
     setNoteConflictSignal(nextConflict)
 
-    if (nextConflict === null && isDiffMode()) {
+    if ((nextConflict === null || nextConflict.kind !== 'text') && isDiffMode()) {
       setIsDiffMode(false)
       void mountEditor('plain').catch(reportError)
     }
@@ -287,8 +306,14 @@ function App() {
 
   function snapshotCurrentOpenNoteForSync() {
     const path = currentPath()
+    const file = loadedFileSnapshot()
 
-    if (activeSyncOpenNoteSnapshots === null || path === null || activeSyncOpenNoteSnapshots.has(path)) {
+    if (
+      activeSyncOpenNoteSnapshots === null ||
+      path === null ||
+      !isTextStoredFile(file) ||
+      activeSyncOpenNoteSnapshots.has(path)
+    ) {
       return
     }
 
@@ -310,7 +335,7 @@ function App() {
   function syncConflictDraft(value: string) {
     const conflict = noteConflict()
 
-    if (conflict === null || conflict.path !== currentPath()) {
+    if (conflict === null || conflict.kind !== 'text' || conflict.path !== currentPath()) {
       return
     }
 
@@ -339,17 +364,34 @@ function App() {
     }
   }
 
+  async function refreshWorkspace(preferredPath: string | null, options: RefreshWorkspaceOptions = {}) {
+    await refreshWorkspaceState(noteContext, preferredPath, options)
+    editor?.refresh()
+  }
+
   async function mountEditor(mode: EditorMode = 'plain') {
     if (editorElement === undefined) {
       return
     }
 
-    const nextMode = mode === 'diff' && noteConflict() !== null ? 'diff' : 'plain'
-    const nextEditorPath = nextMode === 'diff' ? (noteConflict()?.path ?? currentPath()) : currentPath()
+    const conflict = noteConflict()
+    const nextMode = mode === 'diff' && conflict?.kind === 'text' ? 'diff' : 'plain'
+    const nextEditorPath = nextMode === 'diff' ? (conflict?.path ?? currentPath()) : currentPath()
+    const loadedFile = loadedFileSnapshot()
+
+    if (nextMode === 'plain' && nextEditorPath !== null && loadedFile !== null && !isTextStoredFile(loadedFile)) {
+      editor?.dispose()
+      editor = undefined
+      editorMode = 'plain'
+      activeEditorPath = nextEditorPath
+      setEditorLanguageId(getFileTypeLabel(loadedFile.path, loadedFile.mimeType))
+      return
+    }
 
     if (editor !== undefined && editorMode === nextMode && activeEditorPath === nextEditorPath) {
       editor.setPath(nextEditorPath)
       editor.setValue(draftContent())
+      editor.refresh()
       setEditorLanguageId(editor.getLanguageId())
       return
     }
@@ -361,9 +403,7 @@ function App() {
     const monaco = await import('./editor/monaco.ts')
 
     if (nextMode === 'diff') {
-      const conflict = noteConflict()
-
-      if (conflict === null) {
+      if (conflict === null || conflict.kind !== 'text') {
         editorMode = 'plain'
         await mountEditor('plain')
         return
@@ -389,6 +429,10 @@ function App() {
     editor = monaco.createMonacoEditor(editorElement, {
       initialValue: draftContent(),
       path: currentPath(),
+      async readFile(path) {
+        const currentStorage = storage()
+        return currentStorage === null ? null : readStoredFile(currentStorage, path)
+      },
       onChange(value) {
         setDraftContent(value)
         syncConflictDraft(value)
@@ -417,6 +461,12 @@ function App() {
     setErrorMessage,
     setEditorValue(value) {
       const path = currentPath()
+
+      if (loadedFileSnapshot() !== null && !isTextStoredFile(loadedFileSnapshot())) {
+        setEditorLanguageId(getFileTypeLabel(path ?? 'file', loadedFileSnapshot()?.mimeType ?? null))
+        return
+      }
+
       editor?.setPath(path)
       activeEditorPath = path
       setEditorLanguageId(editor?.getLanguageId() ?? null)
@@ -437,7 +487,7 @@ function App() {
     setReconnectableDirectoryName,
     setErrorMessage,
     refreshWorkspace(preferredPath) {
-      return refreshWorkspace(noteContext, preferredPath)
+      return refreshWorkspace(preferredPath)
     },
     focusEditor() {
       editor?.focus()
@@ -459,7 +509,7 @@ function App() {
     setNoteConflict,
     flushPendingSave,
     refreshWorkspace(preferredPath) {
-      return refreshWorkspace(noteContext, preferredPath, getSyncRefreshOptions(preferredPath))
+      return refreshWorkspace(preferredPath, getSyncRefreshOptions(preferredPath))
     },
   }
 
@@ -481,6 +531,23 @@ function App() {
       }
     },
   })
+
+  createEffect(
+    on(
+      [
+        currentPath,
+        () => loadedFileSnapshot()?.contentHash ?? null,
+        () => loadedFileSnapshot()?.format ?? null,
+        isDiffMode,
+        () => noteConflictSignal()?.path ?? null,
+        () => noteConflictSignal()?.kind ?? null,
+      ],
+      () => {
+        void mountEditor(isDiffMode() ? 'diff' : 'plain').catch(reportError)
+      },
+      { defer: true },
+    ),
+  )
 
   function clearPendingSave() {
     if (saveTimeout === undefined) {
@@ -504,16 +571,16 @@ function App() {
     clearPendingSave()
     setErrorMessage(null)
     setCurrentPath(conflict.path)
-    setDraftContent(conflict.draftContent)
-    editor?.setValue(conflict.draftContent)
+    setDraftContent(conflict.kind === 'text' ? conflict.draftContent : '')
     setLoadedFileSnapshot(conflict.loadedSnapshot)
+    editor?.setValue(conflict.kind === 'text' ? conflict.draftContent : '')
     snapshotCurrentOpenNoteForSync()
     await updateSettings((current) => ({
       ...current,
       lastOpenedPath: conflict.path,
     }))
 
-    if (conflict.preferredMode === 'diff') {
+    if (conflict.kind === 'text' && conflict.preferredMode === 'diff') {
       setIsDiffMode(true)
       await mountEditor('diff')
     } else {
@@ -588,7 +655,7 @@ function App() {
     for (let attempt = 0; ; attempt += 1) {
       const candidate = createConflictCopyPath(path, timestamp, attempt)
 
-      if ((await currentStorage.readTextFile(candidate)) === null) {
+      if ((await readStoredFile(currentStorage, candidate)) === null) {
         return candidate
       }
     }
@@ -603,8 +670,14 @@ function App() {
     }
 
     if (currentStorage !== null) {
-      if (nextConflict.loadedSnapshot !== null || nextConflict.draftContent.length > 0) {
-        await currentStorage.writeTextFile(nextConflict.path, nextConflict.draftContent)
+      if (nextConflict.kind === 'text') {
+        if (nextConflict.loadedSnapshot !== null || nextConflict.draftContent.length > 0) {
+          await currentStorage.writeTextFile(nextConflict.path, nextConflict.draftContent)
+        } else {
+          await currentStorage.deleteEntry(nextConflict.path)
+        }
+      } else if (nextConflict.localFile !== null) {
+        await writeStoredFile(currentStorage, nextConflict.path, toWriteFileInput(nextConflict.localFile))
       } else {
         await currentStorage.deleteEntry(nextConflict.path)
       }
@@ -623,7 +696,15 @@ function App() {
     }
 
     setErrorMessage(null)
-    await currentStorage.writeTextFile(conflict.path, conflict.draftContent)
+
+    if (conflict.kind === 'text') {
+      await currentStorage.writeTextFile(conflict.path, conflict.draftContent)
+    } else if (conflict.localFile !== null) {
+      await writeStoredFile(currentStorage, conflict.path, toWriteFileInput(conflict.localFile))
+    } else {
+      await currentStorage.deleteEntry(conflict.path)
+    }
+
     setHasUnsyncedWorkspaceChanges(true)
     setNoteConflict(null)
     await loadNote(noteContext, conflict.path)
@@ -647,7 +728,7 @@ function App() {
     setHasUnsyncedWorkspaceChanges(true)
 
     if (conflict.diskFile !== null) {
-      await currentStorage.writeTextFile(conflict.path, conflict.diskFile.content)
+      await writeStoredFile(currentStorage, conflict.path, toWriteFileInput(conflict.diskFile))
       setNoteConflict(null)
       await loadNote(noteContext, conflict.path)
       snapshotCurrentOpenNoteForSync()
@@ -657,7 +738,7 @@ function App() {
 
     await currentStorage.deleteEntry(conflict.path)
     setNoteConflict(null)
-    await refreshWorkspace(noteContext, null)
+    await refreshWorkspace(null)
     snapshotCurrentOpenNoteForSync()
     await promoteNextQueuedConflict()
   }
@@ -674,17 +755,21 @@ function App() {
 
     const copyPath = await findAvailableConflictCopyPath(conflict.path)
 
-    await currentStorage.writeTextFile(copyPath, conflict.draftContent)
+    if (conflict.kind === 'text') {
+      await currentStorage.writeTextFile(copyPath, conflict.draftContent)
+    } else if (conflict.localFile !== null) {
+      await writeStoredFile(currentStorage, copyPath, toWriteFileInput(conflict.localFile))
+    }
 
     if (conflict.diskFile !== null) {
-      await currentStorage.writeTextFile(conflict.path, conflict.diskFile.content)
+      await writeStoredFile(currentStorage, conflict.path, toWriteFileInput(conflict.diskFile))
     } else {
       await currentStorage.deleteEntry(conflict.path)
     }
 
     setHasUnsyncedWorkspaceChanges(true)
     setNoteConflict(null)
-    await refreshWorkspace(noteContext, conflict.diskFile === null ? copyPath : conflict.path)
+    await refreshWorkspace(conflict.diskFile === null ? copyPath : conflict.path)
     snapshotCurrentOpenNoteForSync()
     await requestSync({ mode: 'full', skipPendingSave: true })
 
@@ -708,15 +793,19 @@ function App() {
   async function handleOpenConflictDiff() {
     const conflict = noteConflict()
 
-    if (conflict === null) {
+    if (conflict === null || conflict.kind !== 'text') {
       return
     }
 
     setErrorMessage(null)
-    updateNoteConflict((conflict) => ({
-      ...conflict,
-      preferredMode: 'diff',
-    }))
+    updateNoteConflict((currentConflict) =>
+      currentConflict.kind === 'text'
+        ? {
+            ...currentConflict,
+            preferredMode: 'diff',
+          }
+        : currentConflict,
+    )
     await reopenConflictNote(conflict.path)
   }
 
@@ -1153,6 +1242,8 @@ function App() {
         <div class="resize-handle" onMouseDown={handleResizeStart} />
         <EditorPane
           currentPath={currentPath()}
+          currentFile={loadedFileSnapshot()}
+          fileViewKind={currentFileViewKind()}
           isDiffMode={isDiffMode()}
           reconnectableDirectoryName={reconnectableDirectoryName()}
           onAttachFolder={handleAttachFolder}

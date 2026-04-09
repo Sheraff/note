@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_APP_SETTINGS, type AppSettings, type SyncState } from '../web/schemas.ts'
-import type { NoteStorage } from '../web/storage/types.ts'
+import { getStoredFileViewKind } from '../web/storage/file-classify.ts'
+import { readStoredFile, type NoteStorage } from '../web/storage/types.ts'
 import { attachFolder, bootstrapWorkspace, reconnectFolder, type StorageContext } from '../web/app/storage.ts'
 
 const TEST_USER_ID = 'test-user'
@@ -104,7 +105,7 @@ function createTypeMismatchError(message: string): DOMException {
 class MemoryFileHandle {
   readonly kind = 'file'
   readonly name: string
-  content = ''
+  content: string | Uint8Array = ''
   lastModified = Date.now()
 
   constructor(name: string) {
@@ -115,8 +116,8 @@ class MemoryFileHandle {
     let nextContent = this.content
 
     return {
-      write: async (value: string) => {
-        nextContent = value
+      write: async (value: string | Uint8Array) => {
+        nextContent = typeof value === 'string' ? value : Uint8Array.from(value)
       },
       close: async () => {
         this.content = nextContent
@@ -126,10 +127,15 @@ class MemoryFileHandle {
   }
 
   async getFile(): Promise<File> {
+    const bytes = typeof this.content === 'string' ? new TextEncoder().encode(this.content) : Uint8Array.from(this.content)
+
     return {
       lastModified: this.lastModified,
       name: this.name,
-      text: async () => this.content,
+      size: bytes.byteLength,
+      type: '',
+      arrayBuffer: async () => Uint8Array.from(bytes).buffer,
+      text: async () => (typeof this.content === 'string' ? this.content : new TextDecoder().decode(this.content)),
     } as unknown as File
   }
 }
@@ -204,7 +210,7 @@ class MemoryDirectoryHandle {
   }
 }
 
-async function writeFileToRoot(root: MemoryDirectoryHandle, path: string, content: string): Promise<void> {
+async function writeFileToRoot(root: MemoryDirectoryHandle, path: string, content: string | Uint8Array): Promise<void> {
   const segments = path.split('/').filter((segment) => segment.length > 0)
   const fileName = segments.pop()
 
@@ -246,7 +252,11 @@ async function readFileFromRoot(root: MemoryDirectoryHandle, path: string): Prom
 
   const file = directory.children.get(fileName)
 
-  return file instanceof MemoryFileHandle ? file.content : null
+  if (!(file instanceof MemoryFileHandle)) {
+    return null
+  }
+
+  return typeof file.content === 'string' ? file.content : new TextDecoder().decode(file.content)
 }
 
 async function listRootEntries(root: MemoryDirectoryHandle, prefix = ''): Promise<Array<{ kind: 'directory' | 'file'; path: string }>> {
@@ -329,7 +339,7 @@ function describeStorageContract(name: string, setup: () => Promise<StorageHarne
         sortFiles(
           (await storage.listFiles()).map((file) => ({
             path: file.path,
-            content: file.content,
+            content: typeof file.content === 'string' ? file.content : '',
           })),
         ),
       ).toEqual(
@@ -361,7 +371,7 @@ function describeStorageContract(name: string, setup: () => Promise<StorageHarne
         sortFiles(
           (await storage.listFiles()).map((file) => ({
             path: file.path,
-            content: file.content,
+            content: typeof file.content === 'string' ? file.content : '',
           })),
         ),
       ).toEqual(sortFiles([{ path: 'notes/today.md', content: '# Today\n' }]))
@@ -378,6 +388,74 @@ function describeStorageContract(name: string, setup: () => Promise<StorageHarne
       expect((await storage.readTextFile('notes\\ideas/today.md'))?.path).toBe('notes/ideas/today.md')
       expect((await storage.readTextFile('notes/ideas/today.md'))?.content).toBe('# Today\n')
       expect(await storage.readTextFile('notes/missing.md')).toBeNull()
+    })
+
+    it('writes dotfiles and unknown extensions as text', async () => {
+      const { root, storage } = await setup()
+
+      const saved = await storage.writeTextFile('notes/.env.example', 'API_URL=\n')
+
+      expect(saved.path).toBe('notes/.env.example')
+      expect(saved.content).toBe('API_URL=\n')
+      expect(await readFileFromRoot(root, 'notes/.env.example')).toBe('API_URL=\n')
+      expect(getStoredFileViewKind(saved)).toBe('text')
+    })
+
+    it('reads dotfiles and extensionless utf-8 files as text', async () => {
+      const { root, storage } = await setup()
+
+      await writeFileToRoot(root, 'notes/.env', 'TOKEN=value\n')
+      await writeFileToRoot(root, 'notes/.env.example', 'TOKEN=\n')
+      await writeFileToRoot(root, 'notes/just-a-file', 'plain text\n')
+
+      const envFile = await readStoredFile(storage, 'notes/.env')
+      const exampleFile = await readStoredFile(storage, 'notes/.env.example')
+      const extensionlessFile = await readStoredFile(storage, 'notes/just-a-file')
+
+      expect(envFile).toMatchObject({ format: 'text', content: 'TOKEN=value\n' })
+      expect(exampleFile).toMatchObject({ format: 'text', content: 'TOKEN=\n' })
+      expect(extensionlessFile).toMatchObject({ format: 'text', content: 'plain text\n' })
+
+      if (exampleFile === null || extensionlessFile === null) {
+        throw new Error('Expected text files to be readable')
+      }
+
+      expect(getStoredFileViewKind(exampleFile)).toBe('text')
+      expect(getStoredFileViewKind(extensionlessFile)).toBe('text')
+    })
+
+    it('keeps unknown binary files as attachments', async () => {
+      const { root, storage } = await setup()
+      const binaryContent = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff])
+
+      await writeFileToRoot(root, 'notes/blob.data', binaryContent)
+
+      const file = await readStoredFile(storage, 'notes/blob.data')
+
+      expect(await storage.readTextFile('notes/blob.data')).toBeNull()
+
+      if (file === null || file.format !== 'binary') {
+        throw new Error('Expected the binary file to stay binary')
+      }
+
+      expect(getStoredFileViewKind(file)).toBe('attachment')
+      expect([...file.content]).toEqual([...binaryContent])
+    })
+
+    it('keeps svg files in image view even though they are utf-8 text', async () => {
+      const { root, storage } = await setup()
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>'
+
+      await writeFileToRoot(root, 'notes/pixel.svg', svg)
+
+      const file = await readStoredFile(storage, 'notes/pixel.svg')
+
+      if (file === null || file.format !== 'binary') {
+        throw new Error('Expected svg files to stay binary image assets')
+      }
+
+      expect(file.mimeType).toBe('image/svg+xml')
+      expect(getStoredFileViewKind(file)).toBe('image')
     })
 
     it('creates nested directories with normalized paths', async () => {

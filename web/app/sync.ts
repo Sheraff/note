@@ -3,7 +3,7 @@ import type { NoteConflict, SaveCurrentNoteResult } from './notes.ts'
 import type { SyncState } from '#web/schemas.ts'
 import { pullRemoteChanges, syncWithServer } from '#web/notes/sync.ts'
 import { setSyncState } from '#web/storage/metadata.ts'
-import type { NoteStorage, StoredFile } from '#web/storage/types.ts'
+import { isTextStoredFile, readStoredFile, toWriteFileInput, writeStoredFile, type NoteStorage, type StoredFile } from '#web/storage/types.ts'
 
 const api = createApiClient()
 
@@ -51,10 +51,23 @@ async function persistSyncState(context: SyncContext, syncState: SyncState): Pro
 }
 
 function createSyncNoteConflict(path: string, mineFile: StoredFile | null, theirsFile: StoredFile | null): NoteConflict {
+  if (mineFile?.format !== 'binary' && theirsFile?.format !== 'binary') {
+    return {
+      kind: 'text',
+      path,
+      preferredMode: 'popover',
+      draftContent: mineFile?.content ?? '',
+      diskFile: isTextStoredFile(theirsFile) ? theirsFile : null,
+      loadedSnapshot: mineFile,
+      source: 'remote',
+    }
+  }
+
   return {
+    kind: 'file',
     path,
     preferredMode: 'popover',
-    draftContent: mineFile?.content ?? '',
+    localFile: mineFile,
     diskFile: theirsFile,
     loadedSnapshot: mineFile,
     source: 'remote',
@@ -63,7 +76,7 @@ function createSyncNoteConflict(path: string, mineFile: StoredFile | null, their
 
 async function writeConflictSourceVersion(storage: NoteStorage, conflict: NoteConflict): Promise<void> {
   if (conflict.diskFile !== null) {
-    await storage.writeTextFile(conflict.path, conflict.diskFile.content)
+    await writeStoredFile(storage, conflict.path, toWriteFileInput(conflict.diskFile))
     return
   }
 
@@ -92,7 +105,7 @@ async function runFullSync(context: SyncContext, storage: NoteStorage): Promise<
     const noteConflicts: NoteConflict[] = []
 
     for (const conflict of result.conflicts) {
-      noteConflicts.push(createSyncNoteConflict(conflict.path, await storage.readTextFile(conflict.path), conflict.theirsFile))
+      noteConflicts.push(createSyncNoteConflict(conflict.path, await readStoredFile(storage, conflict.path), conflict.theirsFile))
     }
 
     for (const queuedConflict of noteConflicts.slice(1)) {

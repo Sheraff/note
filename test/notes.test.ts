@@ -1,8 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createFolder, createNote, moveEntry, refreshWorkspace, renameEntry, saveCurrentNote, type NoteConflict, type NoteContext } from '../web/app/notes.ts'
-import { hashContent } from '../web/notes/hashes.ts'
+import { hashBytes, hashContent } from '../web/notes/hashes.ts'
 import { DEFAULT_APP_SETTINGS, type AppSettings } from '../web/schemas.ts'
-import type { ListedEntry, NoteStorage, StoredFile } from '../web/storage/types.ts'
+import {
+  createStoredBinaryFile,
+  createStoredTextFile,
+  type ListedEntry,
+  type NoteStorage,
+  type StoredFile,
+  type StoredTextFile,
+} from '../web/storage/types.ts'
 
 function createSettings(overrides: Partial<AppSettings> = {}): AppSettings {
   return {
@@ -15,13 +22,27 @@ function createSettings(overrides: Partial<AppSettings> = {}): AppSettings {
   }
 }
 
-async function createStoredFile(path: string, content: string, updatedAt: string): Promise<StoredFile> {
-  return {
+async function createStoredFile(path: string, content: string, updatedAt: string): Promise<StoredTextFile> {
+  return createStoredTextFile({
     path,
     content,
     contentHash: await hashContent(content),
     updatedAt,
-  }
+  })
+}
+
+function createStoredFileStub(
+  path: string,
+  content: string,
+  updatedAt = new Date().toISOString(),
+  contentHash = 'hash',
+): StoredTextFile {
+  return createStoredTextFile({
+    path,
+    content,
+    contentHash,
+    updatedAt,
+  })
 }
 
 function createMockStorage(error: Error): NoteStorage {
@@ -37,13 +58,8 @@ function createMockStorage(error: Error): NoteStorage {
     async readTextFile() {
       return null
     },
-    async writeTextFile(path: string, content: string): Promise<StoredFile> {
-      return {
-        path,
-        content,
-        contentHash: 'hash',
-        updatedAt: new Date().toISOString(),
-      }
+    async writeTextFile(path: string, content: string): Promise<StoredTextFile> {
+      return createStoredFileStub(path, content)
     },
     async deleteEntry() {},
     async createDirectory() {
@@ -228,13 +244,8 @@ describe('inline create errors', () => {
       async readTextFile() {
         return null
       },
-      async writeTextFile(path: string, content: string): Promise<StoredFile> {
-        return {
-          path,
-          content,
-          contentHash: 'hash',
-          updatedAt: new Date().toISOString(),
-        }
+      async writeTextFile(path: string, content: string): Promise<StoredTextFile> {
+        return createStoredFileStub(path, content)
       },
       async deleteEntry() {},
       async createDirectory() {},
@@ -263,13 +274,8 @@ describe('inline create errors', () => {
       async readTextFile() {
         return null
       },
-      async writeTextFile(path: string, content: string): Promise<StoredFile> {
-        return {
-          path,
-          content,
-          contentHash: 'hash',
-          updatedAt: new Date().toISOString(),
-        }
+      async writeTextFile(path: string, content: string): Promise<StoredTextFile> {
+        return createStoredFileStub(path, content)
       },
       async deleteEntry() {},
       async createDirectory() {},
@@ -301,13 +307,8 @@ describe('inline create errors', () => {
       async readTextFile() {
         return null
       },
-      async writeTextFile(path: string, content: string): Promise<StoredFile> {
-        return {
-          path,
-          content,
-          contentHash: 'hash',
-          updatedAt: new Date().toISOString(),
-        }
+      async writeTextFile(path: string, content: string): Promise<StoredTextFile> {
+        return createStoredFileStub(path, content)
       },
       async deleteEntry() {},
       async createDirectory() {},
@@ -341,13 +342,8 @@ describe('inline create errors', () => {
       async readTextFile() {
         return null
       },
-      async writeTextFile(path: string, content: string): Promise<StoredFile> {
-        return {
-          path,
-          content,
-          contentHash: 'hash',
-          updatedAt: new Date().toISOString(),
-        }
+      async writeTextFile(path: string, content: string): Promise<StoredTextFile> {
+        return createStoredFileStub(path, content)
       },
       async deleteEntry() {},
       async createDirectory() {},
@@ -387,20 +383,10 @@ describe('inline create errors', () => {
           return null
         }
 
-        return {
-          path,
-          content: '# Done\n',
-          contentHash: 'hash',
-          updatedAt: '2026-04-05T00:00:00.000Z',
-        }
+        return createStoredFileStub(path, '# Done\n', '2026-04-05T00:00:00.000Z')
       },
-      async writeTextFile(path: string, content: string): Promise<StoredFile> {
-        return {
-          path,
-          content,
-          contentHash: 'hash',
-          updatedAt: new Date().toISOString(),
-        }
+      async writeTextFile(path: string, content: string): Promise<StoredTextFile> {
+        return createStoredFileStub(path, content)
       },
       async deleteEntry() {},
       async createDirectory() {},
@@ -472,20 +458,10 @@ describe('inline create errors', () => {
           return null
         }
 
-        return {
-          path,
-          content: '# Archived\n',
-          contentHash: 'hash',
-          updatedAt: '2026-04-05T00:00:00.000Z',
-        }
+        return createStoredFileStub(path, '# Archived\n', '2026-04-05T00:00:00.000Z')
       },
-      async writeTextFile(path: string, content: string): Promise<StoredFile> {
-        return {
-          path,
-          content,
-          contentHash: 'hash',
-          updatedAt: new Date().toISOString(),
-        }
+      async writeTextFile(path: string, content: string): Promise<StoredTextFile> {
+        return createStoredFileStub(path, content)
       },
       async deleteEntry() {},
       async createDirectory() {},
@@ -555,20 +531,10 @@ describe('moveEntry', () => {
           return null
         }
 
-        return {
-          path,
-          content: '# Archived\n',
-          contentHash: 'hash',
-          updatedAt: '2026-04-05T00:00:00.000Z',
-        }
+        return createStoredFileStub(path, '# Archived\n', '2026-04-05T00:00:00.000Z')
       },
-      async writeTextFile(path: string, content: string): Promise<StoredFile> {
-        return {
-          path,
-          content,
-          contentHash: 'hash',
-          updatedAt: new Date().toISOString(),
-        }
+      async writeTextFile(path: string, content: string): Promise<StoredTextFile> {
+        return createStoredFileStub(path, content)
       },
       async deleteEntry() {},
       async createDirectory() {},
@@ -654,20 +620,10 @@ describe('moveEntry', () => {
           return null
         }
 
-        return {
-          path,
-          content: '# Archived\n',
-          contentHash: 'hash',
-          updatedAt: '2026-04-05T00:00:00.000Z',
-        }
+        return createStoredFileStub(path, '# Archived\n', '2026-04-05T00:00:00.000Z')
       },
-      async writeTextFile(path: string, content: string): Promise<StoredFile> {
-        return {
-          path,
-          content,
-          contentHash: 'hash',
-          updatedAt: new Date().toISOString(),
-        }
+      async writeTextFile(path: string, content: string): Promise<StoredTextFile> {
+        return createStoredFileStub(path, content)
       },
       async deleteEntry() {},
       async createDirectory() {},
@@ -742,13 +698,8 @@ describe('moveEntry', () => {
       async readTextFile() {
         return null
       },
-      async writeTextFile(path: string, content: string): Promise<StoredFile> {
-        return {
-          path,
-          content,
-          contentHash: 'hash',
-          updatedAt: new Date().toISOString(),
-        }
+      async writeTextFile(path: string, content: string): Promise<StoredTextFile> {
+        return createStoredFileStub(path, content)
       },
       async deleteEntry() {},
       async createDirectory() {},
@@ -788,13 +739,8 @@ describe('moveEntry', () => {
       async readTextFile() {
         return null
       },
-      async writeTextFile(path: string, content: string): Promise<StoredFile> {
-        return {
-          path,
-          content,
-          contentHash: 'hash',
-          updatedAt: new Date().toISOString(),
-        }
+      async writeTextFile(path: string, content: string): Promise<StoredTextFile> {
+        return createStoredFileStub(path, content)
       },
       async deleteEntry() {},
       async createDirectory() {},
@@ -823,13 +769,8 @@ describe('moveEntry', () => {
       async readTextFile() {
         return null
       },
-      async writeTextFile(path: string, content: string): Promise<StoredFile> {
-        return {
-          path,
-          content,
-          contentHash: 'hash',
-          updatedAt: new Date().toISOString(),
-        }
+      async writeTextFile(path: string, content: string): Promise<StoredTextFile> {
+        return createStoredFileStub(path, content)
       },
       async deleteEntry() {},
       async createDirectory() {},
@@ -858,13 +799,8 @@ describe('moveEntry', () => {
       async readTextFile() {
         return null
       },
-      async writeTextFile(path: string, content: string): Promise<StoredFile> {
-        return {
-          path,
-          content,
-          contentHash: 'hash',
-          updatedAt: new Date().toISOString(),
-        }
+      async writeTextFile(path: string, content: string): Promise<StoredTextFile> {
+        return createStoredFileStub(path, content)
       },
       async deleteEntry() {},
       async createDirectory() {},
@@ -1026,14 +962,93 @@ describe('saveCurrentNote', () => {
       },
     })
     expect(writeTextFile).not.toHaveBeenCalled()
-    expect(setNoteConflict).toHaveBeenCalledWith({
-      path: 'notes/today.md',
-      preferredMode: 'popover',
-      draftContent: '# Local draft\n',
-      diskFile,
-      loadedSnapshot: snapshot,
-      source: 'local',
+    expect(setNoteConflict).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'text',
+        path: 'notes/today.md',
+        preferredMode: 'popover',
+        draftContent: '# Local draft\n',
+        diskFile,
+        loadedSnapshot: snapshot,
+        source: 'local',
+      }),
+    )
+  })
+
+  it('returns a file conflict when the disk file became binary', async () => {
+    const path = 'notes/today.md'
+    const localDraft = '# Local draft\n'
+    const snapshot = await createStoredFile(path, '# Today\n', '2026-04-05T00:00:00.000Z')
+    const binaryBytes = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"></svg>')
+    const diskFile = createStoredBinaryFile({
+      path,
+      content: binaryBytes,
+      contentHash: await hashBytes(binaryBytes),
+      updatedAt: '2026-04-05T01:00:00.000Z',
+      mimeType: 'image/svg+xml',
     })
+    const writeTextFile = vi.fn(async () => snapshot)
+    const setNoteConflict = vi.fn()
+
+    const storage: NoteStorage = {
+      key: 'directory',
+      label: 'Notes',
+      async listEntries() {
+        return []
+      },
+      async listFiles() {
+        return []
+      },
+      async readFile() {
+        return diskFile
+      },
+      async readTextFile() {
+        return null
+      },
+      writeTextFile,
+      async deleteEntry() {},
+      async createDirectory() {},
+      async renameEntry() {},
+    }
+
+    const result = await saveCurrentNote(
+      createMockContext(storage, () => {}, {
+        currentPath: path,
+        draftContent: localDraft,
+        loadedFileSnapshot: snapshot,
+        setNoteConflict,
+      }),
+    )
+
+    expect(result).toMatchObject({
+      status: 'conflict',
+      conflict: {
+        kind: 'file',
+        path,
+        diskFile,
+        loadedSnapshot: snapshot,
+        source: 'local',
+      },
+    })
+
+    expect(writeTextFile).not.toHaveBeenCalled()
+    expect(setNoteConflict).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'file',
+        path,
+        preferredMode: 'popover',
+        diskFile,
+        loadedSnapshot: snapshot,
+        source: 'local',
+        localFile: expect.objectContaining({
+          format: 'text',
+          path,
+          content: localDraft,
+          contentHash: await hashContent(localDraft),
+          updatedAt: snapshot.updatedAt,
+        }),
+      }),
+    )
   })
 })
 
@@ -1059,13 +1074,8 @@ describe('refreshWorkspace', () => {
       async readTextFile() {
         return file
       },
-      async writeTextFile(path: string, content: string): Promise<StoredFile> {
-        return {
-          path,
-          content,
-          contentHash: 'hash',
-          updatedAt: new Date().toISOString(),
-        }
+      async writeTextFile(path: string, content: string): Promise<StoredTextFile> {
+        return createStoredFileStub(path, content)
       },
       async deleteEntry() {},
       async createDirectory() {},
@@ -1123,13 +1133,8 @@ describe('refreshWorkspace', () => {
       async readTextFile() {
         return syncedFile
       },
-      async writeTextFile(path: string, content: string): Promise<StoredFile> {
-        return {
-          path,
-          content,
-          contentHash: 'hash',
-          updatedAt: new Date().toISOString(),
-        }
+      async writeTextFile(path: string, content: string): Promise<StoredTextFile> {
+        return createStoredFileStub(path, content)
       },
       async deleteEntry() {},
       async createDirectory() {},
@@ -1187,13 +1192,8 @@ describe('refreshWorkspace', () => {
       async readTextFile() {
         return syncedFile
       },
-      async writeTextFile(path: string, content: string): Promise<StoredFile> {
-        return {
-          path,
-          content,
-          contentHash: 'hash',
-          updatedAt: new Date().toISOString(),
-        }
+      async writeTextFile(path: string, content: string): Promise<StoredTextFile> {
+        return createStoredFileStub(path, content)
       },
       async deleteEntry() {},
       async createDirectory() {},

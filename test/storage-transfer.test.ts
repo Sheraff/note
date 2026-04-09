@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { copyStorageEntries, getStorageTransferConflicts, replaceStorageEntries } from '../web/storage/transfer.ts'
-import type { ListedEntry, NoteStorage, StoredFile } from '../web/storage/types.ts'
+import { createStoredTextFile, type ListedEntry, type NoteStorage, type StoredTextFile } from '../web/storage/types.ts'
 
 type MemoryEntry =
   | {
@@ -31,13 +31,13 @@ function getParentPaths(path: string): string[] {
   return parents
 }
 
-function createStoredFile(path: string, content: string): StoredFile {
-  return {
+function createStoredFile(path: string, content: string): StoredTextFile {
+  return createStoredTextFile({
     path,
     content,
     contentHash: `hash:${path}:${content}`,
     updatedAt: DEFAULT_UPDATED_AT,
-  }
+  })
 }
 
 function sortEntries(entries: ListedEntry[]): ListedEntry[] {

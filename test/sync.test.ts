@@ -5,9 +5,22 @@ import type { RemoteFile } from '../server/schemas.ts'
 import { applyChanges, applyChangesToSnapshot } from '../server/sync.ts'
 import { createSyncRequester, syncNow, type FlushPendingSaveResult, type SyncContext, type SyncMode } from '../web/app/sync.ts'
 import { applyRemoteChanges, buildLocalChanges } from '../web/notes/sync.ts'
-import { hashContent } from '../web/notes/hashes.ts'
+import { hashBytes, hashContent } from '../web/notes/hashes.ts'
 import type { SyncState } from '../web/schemas.ts'
-import type { NoteStorage, StoredFile } from '../web/storage/types.ts'
+import {
+  createStoredBinaryFile,
+  createStoredTextFile,
+  type NoteStorage,
+  type StoredFile,
+  type StoredTextFile,
+} from '../web/storage/types.ts'
+
+function createTextContent(value: string) {
+  return {
+    encoding: 'text' as const,
+    value,
+  }
+}
 
 vi.mock('../web/storage/metadata.ts', () => ({
   setSyncState: vi.fn(async () => {}),
@@ -70,19 +83,19 @@ function createDeferred() {
   }
 }
 
-async function createStoredFile(path: string, content: string, updatedAt: string): Promise<StoredFile> {
-  return {
+async function createStoredFile(path: string, content: string, updatedAt: string): Promise<StoredTextFile> {
+  return createStoredTextFile({
     path,
     content,
     contentHash: await hashContent(content),
     updatedAt,
-  }
+  })
 }
 
 async function createRemoteFile(path: string, content: string, updatedAt: string): Promise<RemoteFile> {
   return {
     path,
-    content,
+    content: createTextContent(content),
     contentHash: await hashContent(content),
     updatedAt,
     deletedAt: null,
@@ -110,8 +123,26 @@ function createMemoryStorage(initialFiles: StoredFile[]): NoteStorage {
     async listFiles() {
       return [...files.values()]
     },
-    async readTextFile(path) {
+    async readFile(path) {
       return files.get(path) ?? null
+    },
+    async readTextFile(path) {
+      const file = files.get(path)
+      return file?.format === 'binary' ? null : (file ?? null)
+    },
+    async writeFile(path, file) {
+      const storedFile =
+        file.format === 'binary'
+          ? createStoredBinaryFile({
+              path,
+              content: file.content,
+              contentHash: await hashBytes(Uint8Array.from(file.content)),
+              updatedAt: '2026-04-03T12:00:00.000Z',
+            })
+          : await createStoredFile(path, file.content, '2026-04-03T12:00:00.000Z')
+
+      files.set(path, storedFile)
+      return storedFile
     },
     async writeTextFile(path, content) {
       const file = await createStoredFile(path, content, '2026-04-03T12:00:00.000Z')
@@ -145,7 +176,7 @@ describe('server sync conflicts', () => {
       {
         kind: 'upsert',
         path: 'notes/today.md',
-        content: 'local version',
+        content: createTextContent('local version'),
         updatedAt: '2026-04-03T11:00:00.000Z',
         base: {
           path: 'notes/today.md',
@@ -158,7 +189,7 @@ describe('server sync conflicts', () => {
 
     const original = next.files.find((file) => file.path === 'notes/today.md')
 
-    expect(original?.content).toBe('remote version')
+    expect(original?.content).toEqual(createTextContent('remote version'))
     expect(next.files.some((file) => file.path.startsWith('notes/today.conflict-'))).toBe(false)
     expect(next.conflicts).toEqual([
       {
@@ -174,7 +205,7 @@ describe('server sync conflicts', () => {
       {
         kind: 'upsert',
         path: 'notes/today.md',
-        content: 'same content',
+        content: createTextContent('same content'),
         updatedAt: '2026-04-03T11:00:00.000Z',
         base: {
           path: 'notes/today.md',
@@ -198,7 +229,7 @@ describe('server sync conflicts', () => {
       {
         kind: 'upsert',
         path: 'notes/first.md',
-        content: firstContent,
+        content: createTextContent(firstContent),
         updatedAt: '2026-04-03T10:00:00.000Z',
         base: null,
       },
@@ -210,7 +241,7 @@ describe('server sync conflicts', () => {
       {
         kind: 'upsert',
         path: 'notes/second.md',
-        content: secondContent,
+        content: createTextContent(secondContent),
         updatedAt: '2026-04-03T11:00:00.000Z',
         base: null,
       },
@@ -249,6 +280,43 @@ describe('server sync conflicts', () => {
       process.env.NODE_ENV = originalNodeEnv
     }
   })
+
+  it('rejects malformed base64 sync content before persistence', async () => {
+    const originalNodeEnv = process.env.NODE_ENV
+
+    try {
+      process.env.NODE_ENV = 'development'
+
+      const response = await createApp().fetch(
+        new Request('http://localhost/api/sync/push', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Note-User': `sync-invalid-base64-${randomUUID()}`,
+          },
+          body: JSON.stringify({
+            sinceCursor: 0,
+            changes: [
+              {
+                kind: 'upsert',
+                path: 'notes/pixel.png',
+                content: {
+                  encoding: 'base64',
+                  value: 'not base64*',
+                },
+                updatedAt: '2026-04-03T11:00:00.000Z',
+                base: null,
+              },
+            ],
+          }),
+        }),
+      )
+
+      expect(response.status).toBe(400)
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv
+    }
+  })
 })
 
 describe('client sync helpers', () => {
@@ -268,7 +336,7 @@ describe('client sync helpers', () => {
       {
         kind: 'upsert',
         path: 'notes/new.md',
-        content: 'new note',
+        content: createTextContent('new note'),
         updatedAt: '2026-04-03T11:00:00.000Z',
         base: null,
       },
@@ -282,6 +350,31 @@ describe('client sync helpers', () => {
           updatedAt: '2026-04-03T10:00:00.000Z',
           deletedAt: null,
         },
+      },
+    ])
+  })
+
+  it('serializes binary files as base64 sync upserts', async () => {
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+    const binaryFile = createStoredBinaryFile({
+      path: 'notes/pixel.png',
+      content: bytes,
+      contentHash: await hashBytes(bytes),
+      updatedAt: '2026-04-03T11:00:00.000Z',
+    })
+
+    const changes = buildLocalChanges([], [binaryFile], '2026-04-03T12:00:00.000Z')
+
+    expect(changes).toEqual([
+      {
+        kind: 'upsert',
+        path: 'notes/pixel.png',
+        content: {
+          encoding: 'base64',
+          value: Buffer.from(bytes).toString('base64'),
+        },
+        updatedAt: '2026-04-03T11:00:00.000Z',
+        base: null,
       },
     ])
   })
@@ -498,19 +591,22 @@ describe('client sync helpers', () => {
     expect((await storage.readTextFile('notes/today.md'))?.content).toBe('local version')
     expect(context.refreshWorkspace).toHaveBeenCalledWith('notes/today.md')
     expect(context.setHasKnownLocalChangesSinceSync).toHaveBeenCalledWith(true)
-    expect(context.setNoteConflict).toHaveBeenCalledWith({
-      path: 'notes/today.md',
-      preferredMode: 'popover',
-      draftContent: 'local version',
-      diskFile: {
+    expect(context.setNoteConflict).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'text',
         path: 'notes/today.md',
-        content: 'remote version',
-        contentHash: previousRemoteFile.contentHash,
-        updatedAt: '2026-04-03T10:00:00.000Z',
-      },
-      loadedSnapshot: mineFile,
-      source: 'remote',
-    })
+        preferredMode: 'popover',
+        draftContent: 'local version',
+        diskFile: expect.objectContaining({
+          path: 'notes/today.md',
+          content: 'remote version',
+          contentHash: previousRemoteFile.contentHash,
+          updatedAt: '2026-04-03T10:00:00.000Z',
+        }),
+        loadedSnapshot: mineFile,
+        source: 'remote',
+      }),
+    )
   })
 
   it('keeps local changes marked dirty when an in-flight sync response is older than the current file', async () => {
@@ -577,7 +673,7 @@ describe('client sync helpers', () => {
         files: [
           {
             ...remoteFirst,
-            content: 'local first',
+            content: createTextContent('local first'),
             contentHash: await hashContent('local first'),
             updatedAt: '2026-04-03T11:00:00.000Z',
           },

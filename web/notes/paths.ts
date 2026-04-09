@@ -110,3 +110,50 @@ export function joinNotePath(parent: string | null, name: string): string {
 
   return normalizeNotePath(`${parent}/${normalizedName}`)
 }
+
+export function resolveWorkspacePath(fromPath: string | null, target: string): string | null {
+  const trimmedTarget = target.trim()
+
+  if (trimmedTarget.length === 0) {
+    return null
+  }
+
+  const withoutQuery = trimmedTarget.split(/[?#]/, 1)[0] ?? ''
+
+  if (withoutQuery.length === 0) {
+    return null
+  }
+
+  if (withoutQuery.startsWith('/')) {
+    const normalized = normalizeNotePath(withoutQuery)
+    return normalized.length === 0 ? null : normalized
+  }
+
+  const baseSegments = fromPath === null ? [] : (getParentPath(fromPath)?.split('/') ?? []).filter((segment) => segment.length > 0)
+
+  for (const segment of withoutQuery.replace(WINDOWS_PATH_SEPARATOR, '/').split('/')) {
+    const trimmedSegment = segment.trim()
+
+    if (trimmedSegment.length === 0 || trimmedSegment === '.') {
+      continue
+    }
+
+    if (trimmedSegment === '..') {
+      if (baseSegments.length === 0) {
+        return null
+      }
+
+      baseSegments.pop()
+      continue
+    }
+
+    if (trimmedSegment === '~') {
+      return null
+    }
+
+    baseSegments.push(trimmedSegment)
+  }
+
+  const normalized = normalizeNotePath(baseSegments.join('/'))
+  return normalized.length === 0 ? null : normalized
+}

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { comparePaths } from './files.ts'
 import { getCurrentSyncCursor, getNextSyncCursor, listFiles, listFilesSinceCursor, upsertFile } from './db.ts'
-import { type RemoteFile, type SyncBaseEntry, type SyncChange, type SyncConflict } from './schemas.ts'
+import { type FileContent, type RemoteFile, type SyncBaseEntry, type SyncChange, type SyncConflict } from './schemas.ts'
 
 function baseMatchesRemote(remote: RemoteFile | undefined, base: SyncBaseEntry | null): boolean {
   if (remote === undefined) {
@@ -20,15 +20,17 @@ function baseMatchesRemote(remote: RemoteFile | undefined, base: SyncBaseEntry |
   )
 }
 
-function hashContent(content: string): string {
-  return createHash('sha256').update(content).digest('hex')
+function hashFileContent(content: FileContent): string {
+  return content.encoding === 'text'
+    ? createHash('sha256').update(content.value).digest('hex')
+    : createHash('sha256').update(Buffer.from(content.value, 'base64')).digest('hex')
 }
 
-function createRemoteFile(path: string, content: string, updatedAt: string): RemoteFile {
+function createRemoteFile(path: string, content: FileContent, updatedAt: string): RemoteFile {
   return {
     path,
     content,
-    contentHash: hashContent(content),
+    contentHash: hashFileContent(content),
     updatedAt,
     deletedAt: null,
   }
@@ -51,6 +53,14 @@ function createSyncConflict(path: string, remote: RemoteFile | undefined): SyncC
   }
 }
 
+function areSameFileContent(left: FileContent | null, right: FileContent | null): boolean {
+  if (left === null || right === null) {
+    return left === right
+  }
+
+  return left.encoding === right.encoding && left.value === right.value
+}
+
 export function applyChangesToSnapshot(currentFiles: RemoteFile[], changes: SyncChange[]): {
   files: RemoteFile[]
   conflicts: SyncConflict[]
@@ -63,7 +73,7 @@ export function applyChangesToSnapshot(currentFiles: RemoteFile[], changes: Sync
     const hasConflict = !baseMatchesRemote(remote, change.base)
 
     if (change.kind === 'upsert') {
-      if (hasConflict && remote?.deletedAt === null && remote.contentHash === hashContent(change.content)) {
+      if (hasConflict && remote?.deletedAt === null && remote.contentHash === hashFileContent(change.content)) {
         continue
       }
 
@@ -103,10 +113,10 @@ export function applyChanges(userId: string, changes: SyncChange[], sinceCursor:
     const previous = beforeByPath.get(file.path)
 
     if (
-      previous?.content === file.content &&
-      previous.contentHash === file.contentHash &&
-      previous.updatedAt === file.updatedAt &&
-      previous.deletedAt === file.deletedAt
+      areSameFileContent(previous?.content ?? null, file.content) &&
+      previous?.contentHash === file.contentHash &&
+      previous?.updatedAt === file.updatedAt &&
+      previous?.deletedAt === file.deletedAt
     ) {
       continue
     }

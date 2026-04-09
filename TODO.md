@@ -37,15 +37,5 @@
 - [ ] why is codicon.ttf getting loaded? is it only in dev mode or does it happen in prod builds too?
 - [ ] we should look into whether it might be a good idea to compress data before sending it over the wire for big syncs (i.e. when clidnt needs to download many files, or when it needs to upload many files) ("many files" or "a few but big files"). CompressionStream and DecompressionStream are supported in modern browsers.
 - [ ] the seti-icons library we're using is not complete. We should find a way to use https://github.com/jesseweed/seti-ui instead, it provides better mapping and more modern icons, but we will need a build step for it.
+- [ ] we need to support dropping a file or folder from outside the browser onto the file tree to add them. Same rules apply as when dragging an internal file/folder: drop on root, drop on folder, hover 1s to open folder.
 
-
-
-
-font settings
-```json
-	"editor.fontSize": 12,
-	"editor.lineHeight": 1.6,
-	"editor.fontWeight": 300,
-	"editor.fontFamily": "'Monaspace Neon', monospace",
-	"editor.fontLigatures": "'calt', 'liga', 'ss01', 'ss02', 'ss03', 'ss04', 'ss05', 'ss06', 'ss07', 'ss08', 'ss09', 'cv01' 4, 'cv31' 0",
-```

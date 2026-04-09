@@ -6,6 +6,7 @@ import {
   joinNotePath,
   normalizeEntryName,
   normalizeRelativeCreatePath,
+  resolveWorkspacePath,
 } from '../web/notes/paths.ts'
 import { buildTree } from '../web/notes/tree.ts'
 
@@ -45,6 +46,13 @@ describe('note paths', () => {
     expect(createClientConflictCopyPath('notes/today.md', '2026-04-03T09:10:11.000Z')).toBe(
       'notes/today.conflict-2026-04-03T09-10-11-000Z.md',
     )
+  })
+
+  it('resolves markdown image paths within the workspace root', () => {
+    expect(resolveWorkspacePath('notes/docs/readme.md', './image.png')).toBe('notes/docs/image.png')
+    expect(resolveWorkspacePath('notes/docs/readme.md', '../images/pixel.png')).toBe('notes/images/pixel.png')
+    expect(resolveWorkspacePath('notes/docs/readme.md', '/shared/logo.png')).toBe('shared/logo.png')
+    expect(resolveWorkspacePath('notes/docs/readme.md', '../../../escape.png')).toBeNull()
   })
 })
 

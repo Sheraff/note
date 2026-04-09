@@ -2,11 +2,15 @@ import { randomUUID } from 'node:crypto'
 import { expect, test, type APIRequestContext, type Browser, type Dialog, type Page, type Request as BrowserRequest } from '@playwright/test'
 import type { RemoteFile, SyncBaseEntry } from '../server/schemas.ts'
 
+type RemoteTextFile = Omit<RemoteFile, 'content'> & {
+  content: string | null
+}
+
 type SyncSnapshotResponse = {
-  files: RemoteFile[]
+  files: RemoteTextFile[]
   conflicts: Array<{
     path: string
-    theirs: RemoteFile | null
+    theirs: RemoteTextFile | null
   }>
   cursor: number
 }
@@ -15,6 +19,9 @@ type SyncRequestCounts = {
   manifest: number
   push: number
 }
+
+const TEST_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="#58a6ff"/></svg>'
+const UPDATED_TEST_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="#f78166"/></svg>'
 
 const TEST_USER_HEADER = 'X-Note-User'
 
@@ -290,6 +297,20 @@ async function readStoredSyncState(
   }, userId)
 }
 
+function toTextContent(value: string) {
+  return {
+    encoding: 'text' as const,
+    value,
+  }
+}
+
+function toRemoteTextFile(file: RemoteFile): RemoteTextFile {
+  return {
+    ...file,
+    content: file.content === null ? null : file.content.value,
+  }
+}
+
 async function createRemoteFileOnServer(request: APIRequestContext, path: string, content: string, userId?: string): Promise<void> {
   const response = await request.post('/api/sync/push', {
     ...withTestUser(userId),
@@ -299,7 +320,7 @@ async function createRemoteFileOnServer(request: APIRequestContext, path: string
         {
           kind: 'upsert',
           path,
-          content,
+          content: toTextContent(content),
           updatedAt: new Date().toISOString(),
           base: null,
         },
@@ -310,7 +331,7 @@ async function createRemoteFileOnServer(request: APIRequestContext, path: string
   expect(response.ok()).toBe(true)
 }
 
-function createBaseEntry(file: RemoteFile | null): SyncBaseEntry | null {
+function createBaseEntry(file: RemoteTextFile | null): SyncBaseEntry | null {
   if (file === null) {
     return null
   }
@@ -336,7 +357,7 @@ async function updateRemoteFileOnServer(request: APIRequestContext, path: string
         {
           kind: 'upsert',
           path,
-          content,
+          content: toTextContent(content),
           updatedAt: new Date().toISOString(),
           base: createBaseEntry(remoteFile),
         },
@@ -350,10 +371,26 @@ async function updateRemoteFileOnServer(request: APIRequestContext, path: string
 async function getSyncSnapshot(request: APIRequestContext, userId?: string): Promise<SyncSnapshotResponse> {
   const response = await request.get('/api/sync/snapshot', withTestUser(userId))
   expect(response.ok()).toBe(true)
-  return (await response.json()) as SyncSnapshotResponse
+  const snapshot = (await response.json()) as {
+    files: RemoteFile[]
+    conflicts: Array<{
+      path: string
+      theirs: RemoteFile | null
+    }>
+    cursor: number
+  }
+
+  return {
+    files: snapshot.files.map(toRemoteTextFile),
+    conflicts: snapshot.conflicts.map((conflict) => ({
+      ...conflict,
+      theirs: conflict.theirs === null ? null : toRemoteTextFile(conflict.theirs),
+    })),
+    cursor: snapshot.cursor,
+  }
 }
 
-async function getRemoteFile(request: APIRequestContext, path: string, userId?: string): Promise<RemoteFile | null> {
+async function getRemoteFile(request: APIRequestContext, path: string, userId?: string): Promise<RemoteTextFile | null> {
   const snapshot = await getSyncSnapshot(request, userId)
   return snapshot.files.find((file) => file.path === path) ?? null
 }
@@ -421,7 +458,10 @@ async function ensureFileIsOpen(page: Page, filePath: string): Promise<void> {
   await expect(noteButton).toBeVisible()
 
   if ((await noteButton.getAttribute('aria-current')) !== 'true') {
-    await page.locator('.monaco-editor').last().click({ position: { x: 120, y: 24 } })
+    if ((await page.locator('.editor-preview').count()) === 0) {
+      await page.locator('.monaco-editor').last().click({ position: { x: 120, y: 24 } })
+    }
+
     await noteButton.click()
   }
 
@@ -496,6 +536,85 @@ async function setupSyncedWorkspace(
   await reloadAndWaitForSync(page)
   await expect(page).toHaveTitle('Note')
 }
+
+test('shows an image preview for synced image files', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-image-preview-${runId}`
+  const imagePath = `gallery-${runId}/pixel.svg`
+
+  await installTestUserHeader(page, userId)
+  await page.goto('/')
+  await expect(page).toHaveTitle('Note')
+  await waitForSyncIdle(page)
+
+  await writeOpfsFile(page, imagePath, TEST_SVG)
+  await reloadAndWaitForSync(page)
+
+  await ensureFileIsOpen(page, imagePath)
+  await expect(page.locator('.editor-image-preview-panel img')).toBeVisible()
+  await expect(page.locator('.editor-image-preview-meta')).toContainText('pixel.svg')
+  await expect.poll(async () => (await getRemoteFile(request, imagePath, userId))?.path ?? null).toBe(imagePath)
+})
+
+test('renders local markdown image references inline inside Monaco', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-inline-image-${runId}`
+  const notePath = `notes-${runId}/docs/readme.md`
+  const imagePath = `notes-${runId}/images/pixel.svg`
+  const noteContent = `# Images\n\n![Relative](../images/pixel.svg)\n\n![Root](/${imagePath})\n`
+
+  await installTestUserHeader(page, userId)
+  await page.goto('/')
+  await expect(page).toHaveTitle('Note')
+  await waitForSyncIdle(page)
+
+  await writeOpfsFile(page, notePath, noteContent)
+  await writeOpfsFile(page, imagePath, TEST_SVG)
+  await reloadAndWaitForSync(page)
+
+  await ensureFileIsOpen(page, notePath)
+  await expect.poll(async () => await page.locator('.monaco-inline-image-frame img').count()).toBe(2)
+  await expect(page.locator('.monaco-inline-image-label').first()).toContainText(imagePath)
+  await expect.poll(async () => (await getRemoteFile(request, imagePath, userId))?.path ?? null).toBe(imagePath)
+})
+
+test('refreshes inline markdown image previews when a synced asset changes', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-inline-image-refresh-${runId}`
+  const notePath = `notes-${runId}/docs/readme.md`
+  const imagePath = `notes-${runId}/images/pixel.svg`
+  const noteContent = '# Images\n\n![Relative](../images/pixel.svg)\n'
+
+  await installTestUserHeader(page, userId)
+  await page.goto('/')
+  await expect(page).toHaveTitle('Note')
+  await waitForSyncIdle(page)
+
+  await writeOpfsFile(page, notePath, noteContent)
+  await writeOpfsFile(page, imagePath, TEST_SVG)
+  await reloadAndWaitForSync(page)
+
+  await ensureFileIsOpen(page, notePath)
+
+  const previewImage = page.locator('.monaco-inline-image-frame img').first()
+
+  await expect(previewImage).toBeVisible()
+
+  const initialSrc = await previewImage.getAttribute('src')
+
+  expect(initialSrc).not.toBeNull()
+
+  await updateRemoteFileOnServer(request, imagePath, UPDATED_TEST_SVG, userId)
+  await expect.poll(async () => (await getRemoteFile(request, imagePath, userId))?.content ?? null).toBe(UPDATED_TEST_SVG)
+
+  await page.getByRole('button', { name: /^Sync/ }).click()
+  await waitForSyncIdle(page)
+
+  await expect.poll(async () => {
+    const nextSrc = await previewImage.getAttribute('src')
+    return nextSrc !== null && nextSrc !== initialSrc
+  }).toBe(true)
+})
 
 test('auto-syncs exactly once after an editor save', async ({ page, request }) => {
   const runId = randomUUID()

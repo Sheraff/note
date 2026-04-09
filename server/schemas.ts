@@ -3,6 +3,10 @@ import { normalizeNotePath } from './files.ts'
 
 const TimestampSchema = v.pipe(v.string(), v.minLength(1))
 export const SyncCursorSchema = v.pipe(v.number(), v.integer(), v.minValue(0))
+const Base64ContentSchema = v.pipe(
+  v.string(),
+  v.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/, 'Invalid base64 content'),
+)
 
 export const NotePathSchema = v.pipe(
   v.string(),
@@ -11,6 +15,18 @@ export const NotePathSchema = v.pipe(
 )
 
 export const ContentHashSchema = v.pipe(v.string(), v.minLength(1))
+
+export const TextFileContentSchema = v.object({
+  encoding: v.literal('text'),
+  value: v.string(),
+})
+
+export const BinaryFileContentSchema = v.object({
+  encoding: v.literal('base64'),
+  value: Base64ContentSchema,
+})
+
+export const FileContentSchema = v.variant('encoding', [TextFileContentSchema, BinaryFileContentSchema])
 
 export const SyncBaseEntrySchema = v.object({
   path: NotePathSchema,
@@ -21,7 +37,7 @@ export const SyncBaseEntrySchema = v.object({
 
 export const RemoteFileSchema = v.object({
   path: NotePathSchema,
-  content: v.nullable(v.string()),
+  content: v.nullable(FileContentSchema),
   contentHash: v.nullable(ContentHashSchema),
   updatedAt: TimestampSchema,
   deletedAt: v.nullable(TimestampSchema),
@@ -37,7 +53,7 @@ export const ManifestEntrySchema = v.object({
 export const UpsertChangeSchema = v.object({
   kind: v.literal('upsert'),
   path: NotePathSchema,
-  content: v.string(),
+  content: FileContentSchema,
   updatedAt: TimestampSchema,
   base: v.nullable(SyncBaseEntrySchema),
 })
@@ -80,6 +96,7 @@ export const SyncResponseSchema = v.object({
 })
 
 export type SyncBaseEntry = v.InferOutput<typeof SyncBaseEntrySchema>
+export type FileContent = v.InferOutput<typeof FileContentSchema>
 export type RemoteFile = v.InferOutput<typeof RemoteFileSchema>
 export type ManifestEntry = v.InferOutput<typeof ManifestEntrySchema>
 export type SyncChange = v.InferOutput<typeof SyncChangeSchema>

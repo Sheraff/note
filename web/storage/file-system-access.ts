@@ -1,6 +1,15 @@
-import { hashContent } from '../notes/hashes.ts'
 import { isDotStorePath, normalizeNotePath } from '../notes/paths.ts'
-import { isDirectoryPickerSupported, type ListedEntry, type NoteStorage, type StoredFile } from './types.ts'
+import { createStoredFileFromFile } from './file-classify.ts'
+import {
+  isDirectoryPickerSupported,
+  isTextStoredFile,
+  readStoredFile,
+  toWriteFileInput,
+  type ListedEntry,
+  type NoteStorage,
+  type StoredFile,
+  type WriteFileInput,
+} from './types.ts'
 
 function isMissingEntryError(error: unknown): boolean {
   return (
@@ -67,17 +76,6 @@ async function getFileHandleAtPath(
   }
 }
 
-async function toStoredFile(path: string, file: File): Promise<StoredFile> {
-  const content = await file.text()
-
-  return {
-    path,
-    content,
-    contentHash: await hashContent(content),
-    updatedAt: new Date(file.lastModified).toISOString(),
-  }
-}
-
 async function listDirectory(directory: FileSystemDirectoryHandle, prefix = ''): Promise<ListedEntry[]> {
   const entries: ListedEntry[] = []
 
@@ -101,7 +99,7 @@ async function listDirectory(directory: FileSystemDirectoryHandle, prefix = ''):
   return entries
 }
 
-async function readTextFileContent(root: FileSystemDirectoryHandle, path: string): Promise<string> {
+async function readStoredFileContent(root: FileSystemDirectoryHandle, path: string): Promise<StoredFile> {
   const normalizedPath = normalizeNotePath(path)
   const handle = await getFileHandleAtPath(root, normalizedPath, false)
 
@@ -109,13 +107,13 @@ async function readTextFileContent(root: FileSystemDirectoryHandle, path: string
     throw new Error(`Unable to open ${normalizedPath}`)
   }
 
-  return (await handle.getFile()).text()
+  return createStoredFileFromFile(normalizedPath, await handle.getFile())
 }
 
-async function writeStoredTextFile(
+async function writeStoredFile(
   root: FileSystemDirectoryHandle,
   path: string,
-  content: string,
+  file: WriteFileInput,
 ): Promise<StoredFile> {
   const normalizedPath = normalizeNotePath(path)
   const handle = await getFileHandleAtPath(root, normalizedPath, true)
@@ -125,10 +123,16 @@ async function writeStoredTextFile(
   }
 
   const writable = await handle.createWritable()
-  await writable.write(content)
+
+  if (file.format === 'text') {
+    await writable.write(file.content)
+  } else {
+    await writable.write(Uint8Array.from(file.content))
+  }
+
   await writable.close()
 
-  return toStoredFile(normalizedPath, await handle.getFile())
+  return createStoredFileFromFile(normalizedPath, await handle.getFile())
 }
 
 async function deleteEntryAtPath(root: FileSystemDirectoryHandle, path: string): Promise<void> {
@@ -163,8 +167,9 @@ async function createDirectoryAtPath(root: FileSystemDirectoryHandle, path: stri
   }
 }
 
-async function copyTextFile(root: FileSystemDirectoryHandle, path: string, nextPath: string): Promise<void> {
-  await writeStoredTextFile(root, nextPath, await readTextFileContent(root, path))
+async function copyFile(root: FileSystemDirectoryHandle, path: string, nextPath: string): Promise<void> {
+  const file = await readStoredFileContent(root, path)
+  await writeStoredFile(root, nextPath, toWriteFileInput(file))
 }
 
 async function renameEntryAtPath(
@@ -177,7 +182,7 @@ async function renameEntryAtPath(
   const normalizedNextPath = normalizeNotePath(nextPath)
 
   if (kind === 'file') {
-    await copyTextFile(root, normalizedPath, normalizedNextPath)
+    await copyFile(root, normalizedPath, normalizedNextPath)
     await deleteEntryAtPath(root, normalizedPath)
     return
   }
@@ -199,7 +204,7 @@ async function renameEntryAtPath(
       continue
     }
 
-    await copyTextFile(root, entry.path, nextEntryPath)
+    await copyFile(root, entry.path, nextEntryPath)
   }
 
   await deleteEntryAtPath(root, normalizedPath)
@@ -243,7 +248,7 @@ export function createDirectoryStorage(root: FileSystemDirectoryHandle): NoteSto
           continue
         }
 
-        const file = await this.readTextFile(entry.path)
+        const file = await readStoredFile(this, entry.path)
 
         if (file !== null) {
           files.push(file)
@@ -252,17 +257,33 @@ export function createDirectoryStorage(root: FileSystemDirectoryHandle): NoteSto
 
       return files
     },
-    async readTextFile(path) {
+    async readFile(path) {
       const handle = await getFileHandleAtPath(root, path, false)
 
       if (handle === null) {
         return null
       }
 
-      return toStoredFile(normalizeNotePath(path), await handle.getFile())
+      return createStoredFileFromFile(normalizeNotePath(path), await handle.getFile())
+    },
+    async writeFile(path, file) {
+      return writeStoredFile(root, path, file)
+    },
+    async readTextFile(path) {
+      const file = await readStoredFile(this, path)
+      return isTextStoredFile(file) ? file : null
     },
     async writeTextFile(path, content) {
-      return writeStoredTextFile(root, path, content)
+      const file = await writeStoredFile(root, path, {
+        format: 'text',
+        content,
+      })
+
+      if (!isTextStoredFile(file)) {
+        throw new Error(`Expected ${path} to be written as text`)
+      }
+
+      return file
     },
     async deleteEntry(path) {
       await deleteEntryAtPath(root, path)

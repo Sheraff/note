@@ -1,8 +1,12 @@
 import * as monaco from 'monaco-editor'
 // import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution'
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
+import { resolveWorkspacePath } from '#web/notes/paths.ts'
+import { getStoredFileViewKind } from '#web/storage/file-classify.ts'
+import type { StoredFile } from '#web/storage/types.ts'
 import './monaco-diff.css'
 import './monaco-font.css'
+import './monaco-inline-images.css'
 
 const MONASPACE_FONT_FAMILY = 'Monaspace Neon'
 const MONASPACE_FONT_LIGATURES =
@@ -39,6 +43,7 @@ self.MonacoEnvironment = {
 export type MonacoController = {
   getValue(): string
   getLanguageId(): string
+  refresh(): void
   setValue(value: string): void
   setPath(path: string | null): void
   focus(): void
@@ -84,6 +89,7 @@ export function createMonacoEditor(
     initialValue: string
     path: string | null
     onChange(value: string): void
+    readFile(path: string): Promise<StoredFile | null>
   },
 ): MonacoController {
   let isApplyingValue = false
@@ -95,6 +101,10 @@ export function createMonacoEditor(
   const editor = monaco.editor.create(element, {
     model,
     ...createEditorOptions(),
+  })
+  const markdownImages = createMarkdownImageLayer(editor, {
+    path: () => currentPath,
+    readFile: options.readFile,
   })
 
   void ensureMonaspaceFont().then(() => {
@@ -109,6 +119,7 @@ export function createMonacoEditor(
 
     options.onChange(editor.getValue())
   })
+  markdownImages.refresh()
 
   return {
     getValue() {
@@ -116,6 +127,9 @@ export function createMonacoEditor(
     },
     getLanguageId() {
       return model.getLanguageId()
+    },
+    refresh() {
+      markdownImages.refresh()
     },
     setValue(value) {
       if (model.getValue() === value) {
@@ -136,11 +150,13 @@ export function createMonacoEditor(
       model.dispose()
       model = nextModel
       currentPath = path
+      markdownImages.refresh()
     },
     focus() {
       editor.focus()
     },
     dispose() {
+      markdownImages.dispose()
       editor.dispose()
       model.dispose()
     },
@@ -204,6 +220,7 @@ export function createMonacoDiffEditor(
     getLanguageId() {
       return modifiedModel.getLanguageId()
     },
+    refresh() {},
     setValue(value) {
       if (modifiedModel.getValue() === value) {
         return
@@ -366,4 +383,187 @@ function createDiffLabelBadge(text: string, variant: 'original' | 'modified') {
   badgeNode.dataset.variant = variant
   badgeNode.textContent = text
   return badgeNode
+}
+
+function createMarkdownImageLayer(
+  editor: monaco.editor.IStandaloneCodeEditor,
+  options: {
+    path(): string | null
+    readFile(path: string): Promise<StoredFile | null>
+  },
+) {
+  let zoneIds: string[] = []
+  let objectUrls: string[] = []
+  let refreshVersion = 0
+  let disposed = false
+  let refreshTimer: number | undefined
+  const subscription = editor.onDidChangeModelContent(() => {
+    scheduleRefresh()
+  })
+
+  return {
+    refresh: scheduleRefresh,
+    dispose() {
+      disposed = true
+      subscription.dispose()
+
+      if (refreshTimer !== undefined) {
+        window.clearTimeout(refreshTimer)
+      }
+
+      clearZones()
+    },
+  }
+
+  function scheduleRefresh() {
+    if (refreshTimer !== undefined) {
+      window.clearTimeout(refreshTimer)
+    }
+
+    refreshTimer = window.setTimeout(() => {
+      refreshTimer = undefined
+      void refreshMarkdownImages(++refreshVersion)
+    }, 0)
+  }
+
+  async function refreshMarkdownImages(version: number) {
+    if (disposed) {
+      return
+    }
+
+    const model = editor.getModel()
+    const path = options.path()
+
+    if (model === null || path === null || model.getLanguageId() !== 'markdown') {
+      clearZones()
+      return
+    }
+
+    const matches = [...model.getValue().matchAll(/!\[[^\]]*\]\(([^)\r\n]+)\)/g)]
+
+    if (matches.length === 0) {
+      clearZones()
+      return
+    }
+
+    const previews: Array<{ afterLineNumber: number; domNode: HTMLElement; objectUrl: string }> = []
+
+    for (const match of matches) {
+      const rawTarget = extractMarkdownImageTarget(match[1])
+
+      if (rawTarget === null) {
+        continue
+      }
+
+      const resolvedPath = resolveWorkspacePath(path, rawTarget)
+
+      if (resolvedPath === null) {
+        continue
+      }
+
+      const file = await options.readFile(resolvedPath)
+
+      if (disposed || version !== refreshVersion || file === null || file.format !== 'binary' || getStoredFileViewKind(file) !== 'image') {
+        continue
+      }
+
+      const objectUrl = URL.createObjectURL(new Blob([Uint8Array.from(file.content)], { type: file.mimeType ?? undefined }))
+      const position = model.getPositionAt(match.index ?? 0)
+
+      previews.push({
+        afterLineNumber: position.lineNumber,
+        domNode: createMarkdownImageNode(objectUrl, resolvedPath),
+        objectUrl,
+      })
+    }
+
+    if (disposed || version !== refreshVersion) {
+      for (const preview of previews) {
+        URL.revokeObjectURL(preview.objectUrl)
+      }
+
+      return
+    }
+
+    clearZones()
+
+    if (previews.length === 0) {
+      return
+    }
+
+    const nextZoneIds: string[] = []
+
+    editor.changeViewZones((accessor) => {
+      for (const preview of previews) {
+        nextZoneIds.push(
+          accessor.addZone({
+            afterLineNumber: preview.afterLineNumber,
+            domNode: preview.domNode,
+            heightInPx: 220,
+          }),
+        )
+      }
+    })
+
+    zoneIds = nextZoneIds
+    objectUrls = previews.map((preview) => preview.objectUrl)
+  }
+
+  function clearZones() {
+    if (zoneIds.length > 0) {
+      editor.changeViewZones((accessor) => {
+        for (const zoneId of zoneIds) {
+          accessor.removeZone(zoneId)
+        }
+      })
+
+      zoneIds = []
+    }
+
+    for (const objectUrl of objectUrls) {
+      URL.revokeObjectURL(objectUrl)
+    }
+
+    objectUrls = []
+  }
+}
+
+function extractMarkdownImageTarget(value: string | undefined): string | null {
+  if (value === undefined) {
+    return null
+  }
+
+  const trimmed = value.trim()
+
+  if (trimmed.length === 0 || /^[a-z]+:/i.test(trimmed)) {
+    return null
+  }
+
+  if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
+    const target = trimmed.slice(1, -1).trim()
+    return target.length === 0 ? null : target
+  }
+
+  const target = trimmed.split(/\s+/, 1)[0] ?? ''
+  return target.length === 0 ? null : target
+}
+
+function createMarkdownImageNode(objectUrl: string, path: string): HTMLElement {
+  const wrapper = document.createElement('div')
+  wrapper.className = 'monaco-inline-image-zone'
+
+  const frame = document.createElement('div')
+  frame.className = 'monaco-inline-image-frame'
+
+  const image = document.createElement('img')
+  image.src = objectUrl
+  image.alt = path
+
+  const label = document.createElement('span')
+  label.className = 'monaco-inline-image-label'
+  label.textContent = path
+
+  frame.append(image)
+  wrapper.append(frame, label)
+  return wrapper
 }

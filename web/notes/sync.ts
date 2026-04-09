@@ -1,7 +1,15 @@
-import type { ManifestEntry, RemoteFile, SyncBaseEntry, SyncChange, SyncConflict } from '#server/schemas.ts'
+import type { FileContent, ManifestEntry, RemoteFile, SyncBaseEntry, SyncChange, SyncConflict } from '#server/schemas.ts'
 import type { createApiClient } from '#web/api.ts'
 import { type SyncState } from '#web/schemas.ts'
-import type { NoteStorage, StoredFile } from '#web/storage/types.ts'
+import { getMimeTypeHintFromPath } from '#web/storage/file-paths.ts'
+import {
+  createStoredBinaryFile,
+  createStoredTextFile,
+  writeStoredFile,
+  type NoteStorage,
+  type StoredFile,
+  type WriteFileInput,
+} from '#web/storage/types.ts'
 
 export type SyncConflictDetails = {
   path: string
@@ -27,6 +35,82 @@ function createBaseEntry(file: ManifestEntry | undefined): SyncBaseEntry | null 
     updatedAt: file.updatedAt,
     deletedAt: file.deletedAt,
   }
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte)
+  }
+
+  return btoa(binary)
+}
+
+function base64ToBytes(value: string): Uint8Array {
+  const binary = atob(value)
+  const bytes = new Uint8Array(binary.length)
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+
+  return bytes
+}
+
+function getTextContentSize(content: string): number {
+  return new TextEncoder().encode(content).length
+}
+
+function toRemoteContent(file: StoredFile): FileContent {
+  return file.format === 'binary'
+    ? {
+        encoding: 'base64',
+        value: bytesToBase64(file.content),
+      }
+    : {
+        encoding: 'text',
+        value: file.content,
+      }
+}
+
+function toWriteFileInput(content: FileContent): WriteFileInput {
+  if (content.encoding === 'text') {
+    return {
+      format: 'text',
+      content: content.value,
+    }
+  }
+
+  return {
+    format: 'binary',
+    content: base64ToBytes(content.value),
+  }
+}
+
+function toStoredConflictFile(file: RemoteFile): StoredFile | null {
+  if (file.deletedAt !== null || file.content === null || file.contentHash === null) {
+    return null
+  }
+
+  const mimeType = getMimeTypeHintFromPath(file.path)
+
+  return file.content.encoding === 'text'
+    ? createStoredTextFile({
+        path: file.path,
+        content: file.content.value,
+        contentHash: file.contentHash,
+        updatedAt: file.updatedAt,
+        size: getTextContentSize(file.content.value),
+        mimeType,
+      })
+    : createStoredBinaryFile({
+        path: file.path,
+        content: base64ToBytes(file.content.value),
+        contentHash: file.contentHash,
+        updatedAt: file.updatedAt,
+        mimeType,
+      })
 }
 
 function toManifestEntry(file: RemoteFile): ManifestEntry {
@@ -72,7 +156,7 @@ export function buildLocalChanges(
     changes.push({
       kind: 'upsert',
       path: file.path,
-      content: file.content,
+      content: toRemoteContent(file),
       updatedAt: file.updatedAt,
       base: createBaseEntry(previous),
     })
@@ -136,23 +220,14 @@ export async function applyRemoteChanges(
       continue
     }
 
-    await storage.writeTextFile(remote.path, remote.content)
+    await writeStoredFile(storage, remote.path, toWriteFileInput(remote.content))
   }
 
   return { hasSkippedLocalChanges }
 }
 
 function toConflictStoredFile(file: RemoteFile | null): StoredFile | null {
-  if (file === null || file.deletedAt !== null || file.content === null || file.contentHash === null) {
-    return null
-  }
-
-  return {
-    path: file.path,
-    content: file.content,
-    contentHash: file.contentHash,
-    updatedAt: file.updatedAt,
-  }
+  return file === null ? null : toStoredConflictFile(file)
 }
 
 export function resolveSyncConflicts(conflicts: SyncConflict[]): SyncConflictDetails[] {

@@ -2,14 +2,20 @@ import { randomUUID } from 'node:crypto'
 import { expect, test, type APIRequestContext, type Browser, type Page, type Request as BrowserRequest } from '@playwright/test'
 import type { RemoteFile, SyncBaseEntry } from '../server/schemas.ts'
 
+type RemoteTextFile = Omit<RemoteFile, 'content'> & {
+  content: string | null
+}
+
 type SyncSnapshotResponse = {
-  files: RemoteFile[]
+  files: RemoteTextFile[]
   conflicts: Array<{
     path: string
-    theirs: RemoteFile | null
+    theirs: RemoteTextFile | null
   }>
   cursor: number
 }
+
+const TEST_BINARY_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><circle cx="16" cy="16" r="14" fill="#f2cc60"/></svg>'
 
 const TEST_USER_HEADER = 'X-Note-User'
 
@@ -107,7 +113,28 @@ async function setPollingHarnessEnabled(page: Page, enabled: boolean): Promise<v
   }, enabled)
 }
 
-function createBaseEntry(file: RemoteFile | null): SyncBaseEntry | null {
+function toTextContent(value: string) {
+  return {
+    encoding: 'text' as const,
+    value,
+  }
+}
+
+function toBase64Content(value: string) {
+  return {
+    encoding: 'base64' as const,
+    value: Buffer.from(value).toString('base64'),
+  }
+}
+
+function toRemoteTextFile(file: RemoteFile): RemoteTextFile {
+  return {
+    ...file,
+    content: file.content === null ? null : file.content.value,
+  }
+}
+
+function createBaseEntry(file: RemoteTextFile | null): SyncBaseEntry | null {
   if (file === null) {
     return null
   }
@@ -123,15 +150,31 @@ function createBaseEntry(file: RemoteFile | null): SyncBaseEntry | null {
 async function getSyncSnapshot(request: APIRequestContext, userId?: string): Promise<SyncSnapshotResponse> {
   const response = await request.get('/api/sync/snapshot', withTestUser(userId))
   expect(response.ok()).toBe(true)
-  return (await response.json()) as SyncSnapshotResponse
+  const snapshot = (await response.json()) as {
+    files: RemoteFile[]
+    conflicts: Array<{
+      path: string
+      theirs: RemoteFile | null
+    }>
+    cursor: number
+  }
+
+  return {
+    files: snapshot.files.map(toRemoteTextFile),
+    conflicts: snapshot.conflicts.map((conflict) => ({
+      ...conflict,
+      theirs: conflict.theirs === null ? null : toRemoteTextFile(conflict.theirs),
+    })),
+    cursor: snapshot.cursor,
+  }
 }
 
-async function getRemoteFile(request: APIRequestContext, path: string, userId?: string): Promise<RemoteFile | null> {
+async function getRemoteFile(request: APIRequestContext, path: string, userId?: string): Promise<RemoteTextFile | null> {
   const snapshot = await getSyncSnapshot(request, userId)
   return snapshot.files.find((file) => file.path === path) ?? null
 }
 
-async function getRemoteFiles(request: APIRequestContext, prefix: string, userId?: string): Promise<RemoteFile[]> {
+async function getRemoteFiles(request: APIRequestContext, prefix: string, userId?: string): Promise<RemoteTextFile[]> {
   const snapshot = await getSyncSnapshot(request, userId)
   return snapshot.files.filter((file) => file.path.startsWith(prefix)).sort((left, right) => left.path.localeCompare(right.path))
 }
@@ -149,7 +192,31 @@ async function pushRemoteFile(request: APIRequestContext, path: string, content:
         {
           kind: 'upsert',
           path,
-          content,
+          content: toTextContent(content),
+          updatedAt: new Date().toISOString(),
+          base: createBaseEntry(remoteFile),
+        },
+      ],
+    },
+  })
+
+  expect(response.ok()).toBe(true)
+}
+
+async function pushRemoteBinaryFile(request: APIRequestContext, path: string, content: string, userId?: string): Promise<void> {
+  const remoteFile = await getRemoteFile(request, path, userId)
+
+  expect(remoteFile).not.toBeNull()
+
+  const response = await request.post('/api/sync/push', {
+    ...withTestUser(userId),
+    data: {
+      sinceCursor: 0,
+      changes: [
+        {
+          kind: 'upsert',
+          path,
+          content: toBase64Content(content),
           updatedAt: new Date().toISOString(),
           base: createBaseEntry(remoteFile),
         },
@@ -169,7 +236,7 @@ async function createRemoteFileOnServer(request: APIRequestContext, path: string
         {
           kind: 'upsert',
           path,
-          content,
+          content: toTextContent(content),
           updatedAt: new Date().toISOString(),
           base: null,
         },
@@ -787,6 +854,46 @@ test('accepts the cloud version for a remote conflict', async ({ page, request }
   await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(remoteContent)
   await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual([path])
   await expect(page.locator('.monaco-editor .view-lines').last()).toContainText('# Cloud version')
+})
+
+test('accepts the cloud binary version for a remote file conflict', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `browser-${randomUUID()}`
+  const folder = `e2e/${runId}`
+  const fileName = `binary-conflict-${runId}.md`
+  const path = `${folder}/${fileName}`
+  const baseContent = '# Base version\n'
+  const localContent = '# Local draft\n'
+
+  await installTestUserHeader(page, userId)
+  await page.goto('/')
+  await expect(page).toHaveTitle('Note')
+  await waitForSyncIdle(page)
+
+  await writeOpfsFile(page, path, baseContent)
+  await createRemoteFileOnServer(request, path, baseContent, userId)
+  await reloadAndWaitForSync(page)
+
+  await pushRemoteBinaryFile(request, path, TEST_BINARY_SVG, userId)
+  await writeOpfsFile(page, path, localContent)
+  await reloadAndWaitForSync(page)
+
+  const conflictButton = page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) })
+
+  await expect(conflictButton).toBeVisible()
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(localContent)
+
+  await conflictButton.click()
+  await expect(page.getByRole('button', { name: 'Accept cloud version' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Keep my local version' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Save my local version separately' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Resolve conflicting changes' })).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Accept cloud version' }).click()
+
+  await expect(page.getByRole('button', { name: /Cloud conflict:/ })).toHaveCount(0)
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(TEST_BINARY_SVG)
+  await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual([path])
 })
 
 test('saves the current draft separately for a remote conflict', async ({ browser, request }) => {

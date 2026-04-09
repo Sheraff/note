@@ -2,7 +2,7 @@ import { Codicon } from './Codicon.tsx'
 
 export type ConflictActionLabels = {
   acceptTheirs: string
-  resolveInDiff: string
+  resolveInDiff: string | null
   saveMine: string
   saveMineSeparately: string
 }
@@ -37,10 +37,12 @@ export function ConflictActions(props: {
         <Codicon name="copy" />
         <span>{props.labels.saveMineSeparately}</span>
       </button>
-      <button type="button" {...dismissProps} onClick={props.onResolveInDiff}>
-        <Codicon name="split-horizontal" />
-        <span>{props.labels.resolveInDiff}</span>
-      </button>
+      {props.labels.resolveInDiff === null ? null : (
+        <button type="button" {...dismissProps} onClick={props.onResolveInDiff}>
+          <Codicon name="split-horizontal" />
+          <span>{props.labels.resolveInDiff}</span>
+        </button>
+      )}
     </>
   )
 }
