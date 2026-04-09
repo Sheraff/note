@@ -51,6 +51,7 @@ import {
   type StorageTransferConflict,
 } from './storage/transfer.ts'
 import {
+  isRemoteBlobFile,
   isTextStoredFile,
   readStoredFile,
   toWriteFileInput,
@@ -661,6 +662,24 @@ function App() {
     }
   }
 
+  async function writeConflictDiskFile(currentStorage: NoteStorage, conflict: NoteConflict): Promise<void> {
+    if (conflict.diskFile === null) {
+      await currentStorage.deleteEntry(conflict.path)
+      return
+    }
+
+    if (isRemoteBlobFile(conflict.diskFile)) {
+      await writeStoredFile(currentStorage, conflict.path, {
+        format: 'binary',
+        content: await api.getBlob(conflict.diskFile.contentHash),
+        mimeType: conflict.diskFile.mimeType,
+      })
+      return
+    }
+
+    await writeStoredFile(currentStorage, conflict.path, toWriteFileInput(conflict.diskFile))
+  }
+
   async function promoteNextQueuedConflict() {
     const [nextConflict, ...remainingConflicts] = queuedNoteConflicts()
     const currentStorage = storage()
@@ -727,18 +746,9 @@ function App() {
     setErrorMessage(null)
     setHasUnsyncedWorkspaceChanges(true)
 
-    if (conflict.diskFile !== null) {
-      await writeStoredFile(currentStorage, conflict.path, toWriteFileInput(conflict.diskFile))
-      setNoteConflict(null)
-      await loadNote(noteContext, conflict.path)
-      snapshotCurrentOpenNoteForSync()
-      await promoteNextQueuedConflict()
-      return
-    }
-
-    await currentStorage.deleteEntry(conflict.path)
+    await writeConflictDiskFile(currentStorage, conflict)
     setNoteConflict(null)
-    await refreshWorkspace(null)
+    await loadNote(noteContext, conflict.path)
     snapshotCurrentOpenNoteForSync()
     await promoteNextQueuedConflict()
   }
@@ -761,11 +771,7 @@ function App() {
       await writeStoredFile(currentStorage, copyPath, toWriteFileInput(conflict.localFile))
     }
 
-    if (conflict.diskFile !== null) {
-      await writeStoredFile(currentStorage, conflict.path, toWriteFileInput(conflict.diskFile))
-    } else {
-      await currentStorage.deleteEntry(conflict.path)
-    }
+    await writeConflictDiskFile(currentStorage, conflict)
 
     setHasUnsyncedWorkspaceChanges(true)
     setNoteConflict(null)

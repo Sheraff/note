@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { expect, test, type APIRequestContext, type Browser, type Page, type Request as BrowserRequest } from '@playwright/test'
 import type { RemoteFile, SyncBaseEntry } from '../server/schemas.ts'
+import { hashBytes } from '../web/notes/hashes.ts'
+
+type RemoteSyncContent = string | { encoding: 'blob'; hash: string; size: number } | null
 
 type RemoteTextFile = Omit<RemoteFile, 'content'> & {
-  content: string | null
+  content: RemoteSyncContent
 }
 
 type SyncSnapshotResponse = {
@@ -120,17 +123,29 @@ function toTextContent(value: string) {
   }
 }
 
-function toBase64Content(value: string) {
+async function toBlobContent(value: string) {
+  const bytes = new TextEncoder().encode(value)
+
   return {
-    encoding: 'base64' as const,
-    value: Buffer.from(value).toString('base64'),
+    encoding: 'blob' as const,
+    hash: await hashBytes(bytes),
+    size: bytes.byteLength,
   }
 }
 
 function toRemoteTextFile(file: RemoteFile): RemoteTextFile {
   return {
     ...file,
-    content: file.content === null ? null : file.content.value,
+    content:
+      file.content === null
+        ? null
+        : file.content.encoding === 'text'
+          ? file.content.value
+          : {
+              encoding: 'blob',
+              hash: file.content.hash,
+              size: file.content.size,
+            },
   }
 }
 
@@ -205,8 +220,20 @@ async function pushRemoteFile(request: APIRequestContext, path: string, content:
 
 async function pushRemoteBinaryFile(request: APIRequestContext, path: string, content: string, userId?: string): Promise<void> {
   const remoteFile = await getRemoteFile(request, path, userId)
+  const blobContent = await toBlobContent(content)
 
   expect(remoteFile).not.toBeNull()
+
+  const uploadResponse = await request.put(`/api/blobs/${blobContent.hash}`, {
+    ...withTestUser(userId),
+    headers: {
+      ...(withTestUser(userId).headers ?? {}),
+      'Content-Type': 'application/octet-stream',
+    },
+    data: Buffer.from(content),
+  })
+
+  expect(uploadResponse.ok()).toBe(true)
 
   const response = await request.post('/api/sync/push', {
     ...withTestUser(userId),
@@ -216,7 +243,7 @@ async function pushRemoteBinaryFile(request: APIRequestContext, path: string, co
         {
           kind: 'upsert',
           path,
-          content: toBase64Content(content),
+          content: blobContent,
           updatedAt: new Date().toISOString(),
           base: createBaseEntry(remoteFile),
         },
@@ -870,30 +897,46 @@ test('accepts the cloud binary version for a remote file conflict', async ({ pag
   await expect(page).toHaveTitle('Note')
   await waitForSyncIdle(page)
 
-  await writeOpfsFile(page, path, baseContent)
-  await createRemoteFileOnServer(request, path, baseContent, userId)
-  await reloadAndWaitForSync(page)
+  let blobGetCount = 0
+  const handleRequest = (browserRequest: BrowserRequest) => {
+    if (browserRequest.method() === 'GET' && browserRequest.url().includes('/api/blobs/')) {
+      blobGetCount += 1
+    }
+  }
 
-  await pushRemoteBinaryFile(request, path, TEST_BINARY_SVG, userId)
-  await writeOpfsFile(page, path, localContent)
-  await reloadAndWaitForSync(page)
+  page.on('request', handleRequest)
 
-  const conflictButton = page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) })
+  try {
+    await writeOpfsFile(page, path, baseContent)
+    await createRemoteFileOnServer(request, path, baseContent, userId)
+    await reloadAndWaitForSync(page)
 
-  await expect(conflictButton).toBeVisible()
-  await expect.poll(async () => await readOpfsFile(page, path)).toBe(localContent)
+    await pushRemoteBinaryFile(request, path, TEST_BINARY_SVG, userId)
+    await writeOpfsFile(page, path, localContent)
+    await reloadAndWaitForSync(page)
 
-  await conflictButton.click()
-  await expect(page.getByRole('button', { name: 'Accept cloud version' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Keep my local version' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Save my local version separately' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Resolve conflicting changes' })).toHaveCount(0)
+    const conflictButton = page.getByRole('button', { name: new RegExp(`Cloud conflict: ${RegExp.escape(path)}`) })
 
-  await page.getByRole('button', { name: 'Accept cloud version' }).click()
+    await expect(conflictButton).toBeVisible()
+    await expect.poll(async () => await readOpfsFile(page, path)).toBe(localContent)
+    expect(blobGetCount).toBe(0)
 
-  await expect(page.getByRole('button', { name: /Cloud conflict:/ })).toHaveCount(0)
-  await expect.poll(async () => await readOpfsFile(page, path)).toBe(TEST_BINARY_SVG)
-  await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual([path])
+    await conflictButton.click()
+    await expect(page.getByRole('button', { name: 'Accept cloud version' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Keep my local version' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Save my local version separately' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Resolve conflicting changes' })).toHaveCount(0)
+    expect(blobGetCount).toBe(0)
+
+    await page.getByRole('button', { name: 'Accept cloud version' }).click()
+
+    await expect(page.getByRole('button', { name: /Cloud conflict:/ })).toHaveCount(0)
+    await expect.poll(() => blobGetCount).toBe(1)
+    await expect.poll(async () => await readOpfsFile(page, path)).toBe(TEST_BINARY_SVG)
+    await expect.poll(async () => await listOpfsFiles(page, `${folder}/`)).toEqual([path])
+  } finally {
+    page.off('request', handleRequest)
+  }
 })
 
 test('saves the current draft separately for a remote conflict', async ({ browser, request }) => {

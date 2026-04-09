@@ -53,6 +53,18 @@ async function parseJsonResponse<TSchema extends v.BaseSchema<unknown, unknown, 
   return v.parse(schema, await response.json())
 }
 
+async function ensureOkResponse(response: Response): Promise<Response> {
+  if (response.status === 401) {
+    return handleAuthRedirect(response)
+  }
+
+  if (!response.ok) {
+    throw new Error(`Request failed with ${response.status}`)
+  }
+
+  return response
+}
+
 export function createApiClient(baseUrl = '') {
   return {
     async getHealth() {
@@ -79,6 +91,22 @@ export function createApiClient(baseUrl = '') {
           body: JSON.stringify(body),
         }),
         SyncResponseSchema,
+      )
+    },
+    async getBlob(hash: string) {
+      const response = await ensureOkResponse(await fetch(`${baseUrl}/api/blobs/${hash}`))
+
+      return new Uint8Array(await response.arrayBuffer())
+    },
+    async putBlob(hash: string, bytes: Uint8Array) {
+      await ensureOkResponse(
+        await fetch(`${baseUrl}/api/blobs/${hash}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/octet-stream',
+          },
+          body: new Uint8Array(bytes).buffer,
+        }),
       )
     },
   }

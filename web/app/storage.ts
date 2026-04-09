@@ -5,7 +5,14 @@ import {
   queryDirectoryPermission,
   requestDirectoryPermission,
 } from '../storage/file-system-access.ts'
-import { getAppSettings, getDirectoryHandle, getSyncState, setDirectoryHandle } from '../storage/metadata.ts'
+import {
+  getAppSettings,
+  getDirectoryHandle,
+  getDirectoryStorageId,
+  getSyncState,
+  setDirectoryHandle,
+  setDirectoryStorageId,
+} from '../storage/metadata.ts'
 import { createOpfsStorage } from '../storage/opfs.ts'
 import { isDirectoryPickerSupported, type NoteStorage } from '../storage/types.ts'
 
@@ -40,6 +47,48 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError'
 }
 
+async function isSameDirectoryHandle(
+  left: FileSystemDirectoryHandle | null,
+  right: FileSystemDirectoryHandle,
+): Promise<boolean> {
+  if (left == null || typeof left.isSameEntry !== 'function') {
+    return false
+  }
+
+  try {
+    return await left.isSameEntry(right)
+  } catch {
+    return false
+  }
+}
+
+async function ensureDirectoryStorageId(userId: string): Promise<string> {
+  const existingStorageId = await getDirectoryStorageId(userId)
+
+  if (existingStorageId !== null) {
+    return existingStorageId
+  }
+
+  const nextStorageId = crypto.randomUUID()
+  await setDirectoryStorageId(userId, nextStorageId)
+  return nextStorageId
+}
+
+async function resolveDirectoryStorageId(userId: string, nextHandle: FileSystemDirectoryHandle): Promise<string> {
+  const [savedHandle, savedStorageId] = await Promise.all([
+    getDirectoryHandle(userId),
+    getDirectoryStorageId(userId),
+  ])
+
+  if (savedStorageId !== null && (await isSameDirectoryHandle(savedHandle, nextHandle))) {
+    return savedStorageId
+  }
+
+  const nextStorageId = crypto.randomUUID()
+  await setDirectoryStorageId(userId, nextStorageId)
+  return nextStorageId
+}
+
 async function activateStorage(
   context: StorageContext,
   nextStorage: NoteStorage,
@@ -71,7 +120,7 @@ export async function bootstrapWorkspace(context: StorageContext) {
   const handle = await getDirectoryHandle(userId)
 
   if (handle !== null && (await queryDirectoryPermission(handle)) === 'granted') {
-    context.setStorage(createDirectoryStorage(handle))
+    context.setStorage(createDirectoryStorage(handle, await ensureDirectoryStorageId(userId)))
     await context.refreshWorkspace(savedSettings.lastOpenedPath)
     return
   }
@@ -108,10 +157,11 @@ export async function pickFolderHandle(
 }
 
 export async function activateDirectoryHandle(context: StorageContext, handle: FileSystemDirectoryHandle) {
+  const storageId = await resolveDirectoryStorageId(context.userId(), handle)
   await setDirectoryHandle(context.userId(), handle)
   await activateStorage(
     context,
-    createDirectoryStorage(handle),
+    createDirectoryStorage(handle, storageId),
     (current) => ({
       ...current,
       backend: 'directory',
@@ -132,7 +182,8 @@ export async function attachFolder(context: StorageContext): Promise<boolean> {
 }
 
 export async function reconnectFolder(context: StorageContext) {
-  const handle = await getDirectoryHandle(context.userId())
+  const userId = context.userId()
+  const handle = await getDirectoryHandle(userId)
 
   if (handle === null) {
     throw new Error('No saved folder is available to reconnect')
@@ -144,7 +195,7 @@ export async function reconnectFolder(context: StorageContext) {
 
   await activateStorage(
     context,
-    createDirectoryStorage(handle),
+    createDirectoryStorage(handle, await ensureDirectoryStorageId(userId)),
     (current) => ({
       ...current,
       backend: 'directory',

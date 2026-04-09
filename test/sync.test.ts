@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '../server/app.ts'
-import type { RemoteFile } from '../server/schemas.ts'
+import type { RemoteFile, SyncChange } from '../server/schemas.ts'
 import { applyChanges, applyChangesToSnapshot } from '../server/sync.ts'
 import { createSyncRequester, syncNow, type FlushPendingSaveResult, type SyncContext, type SyncMode } from '../web/app/sync.ts'
-import { applyRemoteChanges, buildLocalChanges } from '../web/notes/sync.ts'
+import { applyRemoteChanges, buildLocalChanges, pullRemoteChanges, resolveSyncConflicts, syncWithServer } from '../web/notes/sync.ts'
 import { hashBytes, hashContent } from '../web/notes/hashes.ts'
 import type { SyncState } from '../web/schemas.ts'
 import {
@@ -12,6 +12,7 @@ import {
   createStoredTextFile,
   type NoteStorage,
   type StoredFile,
+  type StoredFileStat,
   type StoredTextFile,
 } from '../web/storage/types.ts'
 
@@ -22,8 +23,38 @@ function createTextContent(value: string) {
   }
 }
 
+async function createBlobContent(bytes: Uint8Array) {
+  return {
+    encoding: 'blob' as const,
+    hash: await hashBytes(new Uint8Array(bytes)),
+    size: bytes.byteLength,
+  }
+}
+
+const {
+  getLocalFileIndexMock,
+  resetLocalFileIndexes,
+  setLocalFileIndexMock,
+  setSyncStateMock,
+} = vi.hoisted(() => {
+  const localFileIndexes = new Map<string, Array<Record<string, unknown>>>()
+
+  return {
+    getLocalFileIndexMock: vi.fn(async (storageCacheKey: string) => localFileIndexes.get(storageCacheKey) ?? []),
+    resetLocalFileIndexes() {
+      localFileIndexes.clear()
+    },
+    setLocalFileIndexMock: vi.fn(async (storageCacheKey: string, entries: Array<Record<string, unknown>>) => {
+      localFileIndexes.set(storageCacheKey, entries)
+    }),
+    setSyncStateMock: vi.fn(async () => {}),
+  }
+})
+
 vi.mock('../web/storage/metadata.ts', () => ({
-  setSyncState: vi.fn(async () => {}),
+  getLocalFileIndex: getLocalFileIndexMock,
+  setLocalFileIndex: setLocalFileIndexMock,
+  setSyncState: setSyncStateMock,
 }))
 
 function createJsonResponse(body: unknown): Response {
@@ -68,6 +99,10 @@ function createSyncContext(options: {
 afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  resetLocalFileIndexes()
+  getLocalFileIndexMock.mockClear()
+  setLocalFileIndexMock.mockClear()
+  setSyncStateMock.mockClear()
 })
 
 function createDeferred() {
@@ -114,11 +149,23 @@ function createManifestEntry(file: RemoteFile) {
 function createMemoryStorage(initialFiles: StoredFile[]): NoteStorage {
   const files = new Map(initialFiles.map((file) => [file.path, file]))
 
+  function toFileStat(file: StoredFile): StoredFileStat {
+    return {
+      path: file.path,
+      size: file.size ?? (file.format === 'text' ? new TextEncoder().encode(file.content).length : file.content.byteLength),
+      lastModified: Date.parse(file.updatedAt),
+    }
+  }
+
   return {
     key: 'opfs',
+    cacheKey: 'memory-opfs',
     label: 'Memory',
     async listEntries() {
       return [...files.values()].map((file) => ({ kind: 'file', path: file.path }))
+    },
+    async listFileStats() {
+      return [...files.values()].map(toFileStat)
     },
     async listFiles() {
       return [...files.values()]
@@ -165,6 +212,88 @@ function createMemoryStorage(initialFiles: StoredFile[]): NoteStorage {
         ...file,
         path: nextPath,
       })
+    },
+  }
+}
+
+function createLocalFileIndexEntry(file: StoredFile, lastModified = Date.parse(file.updatedAt)) {
+  return {
+    path: file.path,
+    contentHash: file.contentHash,
+    updatedAt: file.updatedAt,
+    size: file.size ?? (file.format === 'text' ? new TextEncoder().encode(file.content).length : file.content.byteLength),
+    lastModified,
+    format: file.format,
+    mimeType: file.mimeType ?? null,
+  }
+}
+
+function createCountingStorage(initialFiles: StoredFile[], cacheKey = `counting-${randomUUID()}`) {
+  const files = new Map(initialFiles.map((file) => [file.path, file]))
+  const readCounts = new Map<string, number>()
+  const listFileStats = vi.fn(async () =>
+    [...files.values()].map((file) => ({
+      path: file.path,
+      size: file.size ?? (file.format === 'text' ? new TextEncoder().encode(file.content).length : file.content.byteLength),
+      lastModified: Date.parse(file.updatedAt),
+    })),
+  )
+  const listFiles = vi.fn(async () => {
+    throw new Error('sync should not call listFiles when listFileStats is available')
+  })
+
+  const storage: NoteStorage = {
+    key: 'opfs',
+    cacheKey,
+    label: 'Counting',
+    async listEntries() {
+      return [...files.values()].map((file) => ({ kind: 'file' as const, path: file.path }))
+    },
+    listFileStats,
+    listFiles,
+    async readFile(path) {
+      readCounts.set(path, (readCounts.get(path) ?? 0) + 1)
+      return files.get(path) ?? null
+    },
+    async readTextFile(path) {
+      const file = files.get(path)
+      return file?.format === 'text' ? file : null
+    },
+    async writeFile(path, file) {
+      const storedFile =
+        file.format === 'binary'
+          ? createStoredBinaryFile({
+              path,
+              content: file.content,
+              contentHash: await hashBytes(Uint8Array.from(file.content)),
+              updatedAt: '2026-04-03T12:00:00.000Z',
+            })
+          : await createStoredFile(path, file.content, '2026-04-03T12:00:00.000Z')
+
+      files.set(path, storedFile)
+      return storedFile
+    },
+    async writeTextFile(path, content) {
+      const file = await createStoredFile(path, content, '2026-04-03T12:00:00.000Z')
+      files.set(path, file)
+      return file
+    },
+    async deleteEntry(path) {
+      files.delete(path)
+    },
+    async createDirectory() {},
+    async renameEntry() {},
+  }
+
+  return {
+    storage,
+    listFileStats,
+    listFiles,
+    getReadCount(path: string) {
+      return readCounts.get(path) ?? 0
+    },
+    getTotalReadCount() {
+      return [...readCounts.values()].reduce((total, count) => total + count, 0)
     },
   }
 }
@@ -281,41 +410,261 @@ describe('server sync conflicts', () => {
     }
   })
 
-  it('rejects malformed base64 sync content before persistence', async () => {
-    const originalNodeEnv = process.env.NODE_ENV
+  it('accepts uploaded blobs and stores binary sync rows as blob refs', async () => {
+    const userId = `sync-blob-${randomUUID()}`
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+    const blobContent = await createBlobContent(bytes)
+    const app = createApp()
 
-    try {
-      process.env.NODE_ENV = 'development'
+    const uploadResponse = await app.fetch(
+      new Request(`http://localhost/api/blobs/${blobContent.hash}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Note-User': userId,
+        },
+        body: Buffer.from(bytes),
+      }),
+    )
 
-      const response = await createApp().fetch(
-        new Request('http://localhost/api/sync/push', {
-          method: 'POST',
+    expect(uploadResponse.status).toBe(204)
+
+    const pushResponse = await app.fetch(
+      new Request('http://localhost/api/sync/push', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Note-User': userId,
+        },
+        body: JSON.stringify({
+          sinceCursor: 0,
+          changes: [
+            {
+              kind: 'upsert',
+              path: 'notes/pixel.png',
+              content: blobContent,
+              updatedAt: '2026-04-03T11:00:00.000Z',
+              base: null,
+            },
+          ],
+        }),
+      }),
+    )
+
+    expect(pushResponse.status).toBe(200)
+
+    const snapshot = await app.fetch(
+      new Request('http://localhost/api/sync/snapshot', {
+        headers: {
+          'X-Note-User': userId,
+        },
+      }),
+    )
+
+    expect(snapshot.status).toBe(200)
+    await expect(snapshot.json()).resolves.toMatchObject({
+      files: [
+        {
+          path: 'notes/pixel.png',
+          content: blobContent,
+          contentHash: blobContent.hash,
+        },
+      ],
+    })
+
+    const downloadResponse = await app.fetch(
+      new Request(`http://localhost/api/blobs/${blobContent.hash}`, {
+        headers: {
+          'X-Note-User': userId,
+        },
+      }),
+    )
+
+    expect(downloadResponse.status).toBe(200)
+    expect(new Uint8Array(await downloadResponse.arrayBuffer())).toEqual(bytes)
+  })
+
+  it('validates blob hash params before the handler runs', async () => {
+    const response = await createApp().fetch(
+      new Request('http://localhost/api/blobs/not-a-valid-hash', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Note-User': `sync-invalid-blob-param-${randomUUID()}`,
+        },
+        body: Buffer.from('not the expected bytes'),
+      }),
+    )
+
+    expect(response.status).toBe(400)
+  })
+
+  it('validates blob hash params on blob downloads too', async () => {
+    const response = await createApp().fetch(
+      new Request('http://localhost/api/blobs/not-a-valid-hash', {
+        headers: {
+          'X-Note-User': `sync-invalid-blob-get-param-${randomUUID()}`,
+        },
+      }),
+    )
+
+    expect(response.status).toBe(400)
+  })
+
+  it('rejects blob uploads when the path hash does not match the uploaded bytes', async () => {
+    const response = await createApp().fetch(
+      new Request(`http://localhost/api/blobs/${'0'.repeat(64)}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Note-User': `sync-invalid-blob-hash-${randomUUID()}`,
+        },
+        body: Buffer.from('not the expected bytes'),
+      }),
+    )
+
+    expect(response.status).toBe(400)
+  })
+
+  it('does not allow one user to download another users blob by hash', async () => {
+    const ownerUserId = `sync-blob-owner-${randomUUID()}`
+    const otherUserId = `sync-blob-other-${randomUUID()}`
+    const bytes = new Uint8Array([1, 2, 3, 4])
+    const blobContent = await createBlobContent(bytes)
+    const app = createApp()
+
+    await app.fetch(
+      new Request(`http://localhost/api/blobs/${blobContent.hash}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Note-User': ownerUserId,
+        },
+        body: Buffer.from(bytes),
+      }),
+    )
+
+    await app.fetch(
+      new Request('http://localhost/api/sync/push', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Note-User': ownerUserId,
+        },
+        body: JSON.stringify({
+          sinceCursor: 0,
+          changes: [
+            {
+              kind: 'upsert',
+              path: 'notes/private.data',
+              content: blobContent,
+              updatedAt: '2026-04-03T11:00:00.000Z',
+              base: null,
+            },
+          ],
+        }),
+      }),
+    )
+
+    const response = await app.fetch(
+      new Request(`http://localhost/api/blobs/${blobContent.hash}`, {
+        headers: {
+          'X-Note-User': otherUserId,
+        },
+      }),
+    )
+
+    expect(response.status).toBe(404)
+  })
+
+  it('keeps prior blob access for the owning user after the remote path changes', async () => {
+    const userId = `sync-blob-history-${randomUUID()}`
+    const originalBytes = new Uint8Array([1, 2, 3, 4])
+    const replacementBytes = new Uint8Array([5, 6, 7, 8])
+    const originalBlob = await createBlobContent(originalBytes)
+    const replacementBlob = await createBlobContent(replacementBytes)
+    const app = createApp()
+
+    for (const [blobContent, bytes] of [
+      [originalBlob, originalBytes],
+      [replacementBlob, replacementBytes],
+    ] as const) {
+      const response = await app.fetch(
+        new Request(`http://localhost/api/blobs/${blobContent.hash}`, {
+          method: 'PUT',
           headers: {
-            'Content-Type': 'application/json',
-            'X-Note-User': `sync-invalid-base64-${randomUUID()}`,
+            'Content-Type': 'application/octet-stream',
+            'X-Note-User': userId,
           },
-          body: JSON.stringify({
-            sinceCursor: 0,
-            changes: [
-              {
-                kind: 'upsert',
-                path: 'notes/pixel.png',
-                content: {
-                  encoding: 'base64',
-                  value: 'not base64*',
-                },
-                updatedAt: '2026-04-03T11:00:00.000Z',
-                base: null,
-              },
-            ],
-          }),
+          body: Buffer.from(bytes),
         }),
       )
 
-      expect(response.status).toBe(400)
-    } finally {
-      process.env.NODE_ENV = originalNodeEnv
+      expect(response.status).toBe(204)
     }
+
+    const originalUpdatedAt = '2026-04-03T11:00:00.000Z'
+    const replacementUpdatedAt = '2026-04-03T12:00:00.000Z'
+
+    await app.fetch(
+      new Request('http://localhost/api/sync/push', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Note-User': userId,
+        },
+        body: JSON.stringify({
+          sinceCursor: 0,
+          changes: [
+            {
+              kind: 'upsert',
+              path: 'notes/blob.data',
+              content: originalBlob,
+              updatedAt: originalUpdatedAt,
+              base: null,
+            },
+          ],
+        }),
+      }),
+    )
+
+    await app.fetch(
+      new Request('http://localhost/api/sync/push', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Note-User': userId,
+        },
+        body: JSON.stringify({
+          sinceCursor: 0,
+          changes: [
+            {
+              kind: 'upsert',
+              path: 'notes/blob.data',
+              content: replacementBlob,
+              updatedAt: replacementUpdatedAt,
+              base: {
+                path: 'notes/blob.data',
+                contentHash: originalBlob.hash,
+                updatedAt: originalUpdatedAt,
+                deletedAt: null,
+              },
+            },
+          ],
+        }),
+      }),
+    )
+
+    const response = await app.fetch(
+      new Request(`http://localhost/api/blobs/${originalBlob.hash}`, {
+        headers: {
+          'X-Note-User': userId,
+        },
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(originalBytes)
   })
 })
 
@@ -354,7 +703,7 @@ describe('client sync helpers', () => {
     ])
   })
 
-  it('serializes binary files as base64 sync upserts', async () => {
+  it('serializes binary files as blob-ref sync upserts', async () => {
     const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
     const binaryFile = createStoredBinaryFile({
       path: 'notes/pixel.png',
@@ -370,13 +719,148 @@ describe('client sync helpers', () => {
         kind: 'upsert',
         path: 'notes/pixel.png',
         content: {
-          encoding: 'base64',
-          value: Buffer.from(bytes).toString('base64'),
+          encoding: 'blob',
+          hash: await hashBytes(bytes),
+          size: bytes.byteLength,
         },
         updatedAt: '2026-04-03T11:00:00.000Z',
         base: null,
       },
     ])
+  })
+
+  it('does not reread unchanged file bodies during a no-op full sync when the local index is warm', async () => {
+    const alpha = await createStoredFile('notes/alpha.md', 'alpha', '2026-04-03T10:00:00.000Z')
+    const beta = await createStoredFile('notes/beta.md', 'beta', '2026-04-03T10:30:00.000Z')
+    const counting = createCountingStorage([alpha, beta])
+    const previousState: SyncState = {
+      files: [
+        createManifestEntry({
+          path: alpha.path,
+          content: createTextContent(alpha.content),
+          contentHash: alpha.contentHash,
+          updatedAt: alpha.updatedAt,
+          deletedAt: null,
+        }),
+        createManifestEntry({
+          path: beta.path,
+          content: createTextContent(beta.content),
+          contentHash: beta.contentHash,
+          updatedAt: beta.updatedAt,
+          deletedAt: null,
+        }),
+      ],
+      cursor: 1,
+      lastSyncedAt: null,
+    }
+
+    await setLocalFileIndexMock(counting.storage.cacheKey ?? counting.storage.key, [
+      createLocalFileIndexEntry(alpha),
+      createLocalFileIndexEntry(beta),
+    ])
+
+    const pushChanges = vi.fn(async (payload: { sinceCursor: number; changes: SyncChange[] }) => {
+      expect(payload.sinceCursor).toBe(1)
+      expect(payload.changes).toEqual([])
+
+      return {
+        files: [],
+        conflicts: [],
+        cursor: 1,
+      }
+    })
+
+    await syncWithServer({
+      api: {
+        pushChanges,
+      } as unknown as Parameters<typeof syncWithServer>[0]['api'],
+      previousState,
+      storage: counting.storage,
+    })
+
+    expect(pushChanges).toHaveBeenCalledTimes(1)
+    expect(counting.listFileStats).toHaveBeenCalledTimes(2)
+    expect(counting.listFiles).not.toHaveBeenCalled()
+    expect(counting.getTotalReadCount()).toBe(0)
+  })
+
+  it('does not reread unchanged file bodies during a no-op remote pull when the local index is warm', async () => {
+    const file = await createStoredFile('notes/today.md', 'same', '2026-04-03T10:00:00.000Z')
+    const counting = createCountingStorage([file])
+    const previousState: SyncState = {
+      files: [createManifestEntry(await createRemoteFile(file.path, file.content, file.updatedAt))],
+      cursor: 1,
+      lastSyncedAt: null,
+    }
+
+    await setLocalFileIndexMock(counting.storage.cacheKey ?? counting.storage.key, [createLocalFileIndexEntry(file)])
+
+    const getRemoteChanges = vi.fn(async (sinceCursor: number) => {
+      expect(sinceCursor).toBe(1)
+
+      return {
+        files: [],
+        conflicts: [],
+        cursor: 1,
+      }
+    })
+
+    await pullRemoteChanges({
+      api: {
+        getRemoteChanges,
+      } as unknown as Parameters<typeof pullRemoteChanges>[0]['api'],
+      previousState,
+      storage: counting.storage,
+    })
+
+    expect(getRemoteChanges).toHaveBeenCalledTimes(1)
+    expect(counting.listFileStats).toHaveBeenCalledTimes(2)
+    expect(counting.listFiles).not.toHaveBeenCalled()
+    expect(counting.getTotalReadCount()).toBe(0)
+  })
+
+  it('rereads only the changed local file body during a full sync', async () => {
+    const unchanged = await createStoredFile('notes/alpha.md', 'alpha', '2026-04-03T10:00:00.000Z')
+    const previousChanged = await createStoredFile('notes/beta.md', 'before', '2026-04-03T10:00:00.000Z')
+    const currentChanged = await createStoredFile('notes/beta.md', 'after', '2026-04-03T11:00:00.000Z')
+    const counting = createCountingStorage([unchanged, currentChanged])
+    const previousState: SyncState = {
+      files: [
+        createManifestEntry(await createRemoteFile(unchanged.path, unchanged.content, unchanged.updatedAt)),
+        createManifestEntry(await createRemoteFile(previousChanged.path, previousChanged.content, previousChanged.updatedAt)),
+      ],
+      cursor: 2,
+      lastSyncedAt: null,
+    }
+
+    await setLocalFileIndexMock(counting.storage.cacheKey ?? counting.storage.key, [
+      createLocalFileIndexEntry(unchanged),
+      createLocalFileIndexEntry(previousChanged),
+    ])
+
+    const pushChanges = vi.fn(async (payload: { sinceCursor: number; changes: SyncChange[] }) => {
+      expect(payload.sinceCursor).toBe(2)
+      expect(payload.changes.map((change) => change.path)).toEqual(['notes/beta.md'])
+
+      return {
+        files: [await createRemoteFile(currentChanged.path, currentChanged.content, currentChanged.updatedAt)],
+        conflicts: [],
+        cursor: 3,
+      }
+    })
+
+    await syncWithServer({
+      api: {
+        pushChanges,
+      } as unknown as Parameters<typeof syncWithServer>[0]['api'],
+      previousState,
+      storage: counting.storage,
+    })
+
+    expect(pushChanges).toHaveBeenCalledTimes(1)
+    expect(counting.listFiles).not.toHaveBeenCalled()
+    expect(counting.getReadCount('notes/alpha.md')).toBe(0)
+    expect(counting.getReadCount('notes/beta.md')).toBe(1)
   })
 
   it('applies remote deletes only to previously synced files', async () => {
@@ -386,7 +870,9 @@ describe('client sync helpers', () => {
     ]
     const storage = createMemoryStorage(localFiles)
 
-    await applyRemoteChanges(storage, [
+    await applyRemoteChanges({
+      getBlob: vi.fn(async () => new Uint8Array()),
+    } as unknown as Parameters<typeof applyRemoteChanges>[0], storage, [
       {
         path: 'notes/remove.md',
         content: null,
@@ -407,10 +893,119 @@ describe('client sync helpers', () => {
     const storage = createMemoryStorage([newerLocalFile])
     const remoteFiles = [await createRemoteFile(path, 'first saved draft', '2026-04-03T11:00:00.000Z')]
 
-    const result = await applyRemoteChanges(storage, remoteFiles, new Set(), [syncedLocalFile])
+    const result = await applyRemoteChanges(
+      {
+        getBlob: vi.fn(async () => new Uint8Array()),
+      } as unknown as Parameters<typeof applyRemoteChanges>[0],
+      storage,
+      remoteFiles,
+      new Set(),
+      [syncedLocalFile],
+    )
 
     expect(result).toEqual({ hasSkippedLocalChanges: true })
     expect((await storage.readTextFile(path))?.content).toBe('newer local draft')
+  })
+
+  it('downloads remote binary bytes separately when applying a changed blob ref', async () => {
+    const path = 'notes/pixel.png'
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+    const blobContent = await createBlobContent(bytes)
+    const storage = createMemoryStorage([])
+    const getBlob = vi.fn(async (hash: string) => {
+      expect(hash).toBe(blobContent.hash)
+      return bytes
+    })
+
+    await applyRemoteChanges(
+      {
+        getBlob,
+      } as unknown as Parameters<typeof applyRemoteChanges>[0],
+      storage,
+      [
+        {
+          path,
+          content: blobContent,
+          contentHash: blobContent.hash,
+          updatedAt: '2026-04-03T11:00:00.000Z',
+          deletedAt: null,
+        },
+      ],
+    )
+
+    expect(getBlob).toHaveBeenCalledTimes(1)
+    expect(await storage.readFile?.(path)).toMatchObject({
+      format: 'binary',
+      contentHash: blobContent.hash,
+      size: bytes.byteLength,
+    })
+  })
+
+  it('skips downloading a remote binary blob when the local hash already matches', async () => {
+    const path = 'notes/pixel.png'
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+    const binaryFile = createStoredBinaryFile({
+      path,
+      content: bytes,
+      contentHash: await hashBytes(bytes),
+      updatedAt: '2026-04-03T11:00:00.000Z',
+    })
+    const storage = createMemoryStorage([binaryFile])
+    const getBlob = vi.fn(async () => {
+      throw new Error('blob download should be skipped')
+    })
+
+    await applyRemoteChanges(
+      {
+        getBlob,
+      } as unknown as Parameters<typeof applyRemoteChanges>[0],
+      storage,
+      [
+        {
+          path,
+          content: {
+            encoding: 'blob',
+            hash: binaryFile.contentHash,
+            size: bytes.byteLength,
+          },
+          contentHash: binaryFile.contentHash,
+          updatedAt: '2026-04-03T11:00:00.000Z',
+          deletedAt: null,
+        },
+      ],
+    )
+
+    expect(getBlob).not.toHaveBeenCalled()
+  })
+
+  it('represents remote binary conflicts as lazy blob refs instead of inline bytes', async () => {
+    const bytes = new Uint8Array([0, 1, 2, 3])
+    const blobContent = await createBlobContent(bytes)
+
+    expect(resolveSyncConflicts([
+      {
+        path: 'notes/blob.data',
+        theirs: {
+          path: 'notes/blob.data',
+          content: blobContent,
+          contentHash: blobContent.hash,
+          updatedAt: '2026-04-03T11:00:00.000Z',
+          deletedAt: null,
+        },
+      },
+    ])).toEqual([
+      {
+        path: 'notes/blob.data',
+        theirsFile: {
+          kind: 'remote-blob',
+          path: 'notes/blob.data',
+          contentHash: blobContent.hash,
+          updatedAt: '2026-04-03T11:00:00.000Z',
+          size: bytes.byteLength,
+          mimeType: null,
+        },
+      },
+    ])
   })
 
   it('serializes sync requests and preserves pending-save syncs', async () => {
@@ -691,5 +1286,6 @@ describe('client sync helpers', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(context.setHasKnownLocalChangesSinceSync).toHaveBeenCalledWith(true)
     expect(context.setQueuedNoteConflicts).not.toHaveBeenCalledWith([])
+    expect((await storage.readTextFile('notes/second.md'))?.content).toBe('local second')
   })
 })

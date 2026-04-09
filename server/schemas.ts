@@ -3,10 +3,6 @@ import { normalizeNotePath } from './files.ts'
 
 const TimestampSchema = v.pipe(v.string(), v.minLength(1))
 export const SyncCursorSchema = v.pipe(v.number(), v.integer(), v.minValue(0))
-const Base64ContentSchema = v.pipe(
-  v.string(),
-  v.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/, 'Invalid base64 content'),
-)
 
 export const NotePathSchema = v.pipe(
   v.string(),
@@ -14,19 +10,20 @@ export const NotePathSchema = v.pipe(
   v.minLength(1),
 )
 
-export const ContentHashSchema = v.pipe(v.string(), v.minLength(1))
+export const ContentHashSchema = v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/))
 
 export const TextFileContentSchema = v.object({
   encoding: v.literal('text'),
   value: v.string(),
 })
 
-export const BinaryFileContentSchema = v.object({
-  encoding: v.literal('base64'),
-  value: Base64ContentSchema,
+export const BlobFileContentSchema = v.object({
+  encoding: v.literal('blob'),
+  hash: ContentHashSchema,
+  size: v.pipe(v.number(), v.integer(), v.minValue(0)),
 })
 
-export const FileContentSchema = v.variant('encoding', [TextFileContentSchema, BinaryFileContentSchema])
+export const FileContentSchema = v.variant('encoding', [TextFileContentSchema, BlobFileContentSchema])
 
 export const SyncBaseEntrySchema = v.object({
   path: NotePathSchema,

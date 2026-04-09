@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { expect, test, type APIRequestContext, type Browser, type Dialog, type Page, type Request as BrowserRequest } from '@playwright/test'
 import type { RemoteFile, SyncBaseEntry } from '../server/schemas.ts'
+import { hashBytes } from '../web/notes/hashes.ts'
+
+type RemoteSyncContent = string | { encoding: 'blob'; hash: string; size: number } | null
 
 type RemoteTextFile = Omit<RemoteFile, 'content'> & {
-  content: string | null
+  content: RemoteSyncContent
 }
 
 type SyncSnapshotResponse = {
@@ -222,6 +225,32 @@ async function writeOpfsFile(page: Page, path: string, content: string): Promise
   )
 }
 
+async function writeOpfsBinaryFile(page: Page, path: string, bytes: number[]): Promise<void> {
+  await page.evaluate(
+    async ({ nextBytes, targetPath }) => {
+      const root = await navigator.storage.getDirectory()
+      const segments = targetPath.split('/').filter((segment) => segment.length > 0)
+      const name = segments.pop()
+
+      if (name === undefined) {
+        throw new Error('Expected a file path')
+      }
+
+      let directory = root
+
+      for (const segment of segments) {
+        directory = await directory.getDirectoryHandle(segment, { create: true })
+      }
+
+      const handle = await directory.getFileHandle(name, { create: true })
+      const writable = await handle.createWritable()
+      await writable.write(new Uint8Array(nextBytes))
+      await writable.close()
+    },
+    { nextBytes: bytes, targetPath: path },
+  )
+}
+
 async function readOpfsFile(page: Page, path: string): Promise<string | null> {
   return page.evaluate(async (targetPath) => {
     const root = await navigator.storage.getDirectory()
@@ -260,7 +289,7 @@ async function readStoredSyncState(
   lastSyncedAt: string | null
 } | null> {
   return page.evaluate(async (currentUserId) => {
-    const request = indexedDB.open('note-metadata', 1)
+    const request = indexedDB.open('note-metadata')
 
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
       request.onsuccess = () => resolve(request.result)
@@ -304,10 +333,27 @@ function toTextContent(value: string) {
   }
 }
 
+async function toBlobContent(bytes: Uint8Array) {
+  return {
+    encoding: 'blob' as const,
+    hash: await hashBytes(new Uint8Array(bytes)),
+    size: bytes.byteLength,
+  }
+}
+
 function toRemoteTextFile(file: RemoteFile): RemoteTextFile {
   return {
     ...file,
-    content: file.content === null ? null : file.content.value,
+    content:
+      file.content === null
+        ? null
+        : file.content.encoding === 'text'
+          ? file.content.value
+          : {
+              encoding: 'blob',
+              hash: file.content.hash,
+              size: file.content.size,
+            },
   }
 }
 
@@ -321,6 +367,43 @@ async function createRemoteFileOnServer(request: APIRequestContext, path: string
           kind: 'upsert',
           path,
           content: toTextContent(content),
+          updatedAt: new Date().toISOString(),
+          base: null,
+        },
+      ],
+    },
+  })
+
+  expect(response.ok()).toBe(true)
+}
+
+async function createRemoteBinaryFileOnServer(
+  request: APIRequestContext,
+  path: string,
+  bytes: Uint8Array,
+  userId?: string,
+): Promise<void> {
+  const blobContent = await toBlobContent(bytes)
+
+  const uploadResponse = await request.put(`/api/blobs/${blobContent.hash}`, {
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      ...(withTestUser(userId).headers ?? {}),
+    },
+    data: Buffer.from(bytes),
+  })
+
+  expect(uploadResponse.ok()).toBe(true)
+
+  const response = await request.post('/api/sync/push', {
+    ...withTestUser(userId),
+    data: {
+      sinceCursor: 0,
+      changes: [
+        {
+          kind: 'upsert',
+          path,
+          content: blobContent,
           updatedAt: new Date().toISOString(),
           base: null,
         },
@@ -405,6 +488,19 @@ async function reloadAndWaitForSync(page: Page): Promise<void> {
 
   expect(response.ok()).toBe(true)
   await waitForSyncIdle(page)
+}
+
+async function reloadAndReadSyncResponse(page: Page): Promise<SyncSnapshotResponse> {
+  const responsePromise = page.waitForResponse(
+    (response) => response.url().endsWith('/api/sync/push') && response.request().method() === 'POST',
+  )
+
+  await page.reload()
+  const response = await responsePromise
+
+  expect(response.ok()).toBe(true)
+  await waitForSyncIdle(page)
+  return (await response.json()) as SyncSnapshotResponse
 }
 
 function getCreatedNotePath(name: string): string {
@@ -554,6 +650,103 @@ test('shows an image preview for synced image files', async ({ page, request }) 
   await expect(page.locator('.editor-image-preview-panel img')).toBeVisible()
   await expect(page.locator('.editor-image-preview-meta')).toContainText('pixel.svg')
   await expect.poll(async () => (await getRemoteFile(request, imagePath, userId))?.path ?? null).toBe(imagePath)
+})
+
+test('syncs non-image binary files through blob refs without inlining them in sync JSON', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-binary-blob-${runId}`
+  const filePath = `attachments-${runId}/archive.data`
+  const bytes = [0, 255, 13, 42, 99, 7]
+  const expectedHash = await hashBytes(new Uint8Array(bytes))
+
+  await installTestUserHeader(page, userId)
+  await page.goto('/')
+  await expect(page).toHaveTitle('Note')
+  await waitForSyncIdle(page)
+
+  await writeOpfsBinaryFile(page, filePath, bytes)
+
+  const syncResponse = await reloadAndReadSyncResponse(page)
+  const remoteFile = await getRemoteFile(request, filePath, userId)
+
+  expect(JSON.stringify(syncResponse)).not.toContain('base64')
+  expect(remoteFile).toMatchObject({
+    path: filePath,
+    content: {
+      encoding: 'blob',
+      hash: expectedHash,
+      size: bytes.length,
+    },
+    contentHash: expectedHash,
+  })
+})
+
+test('round-trips a non-image binary file with the attachment view and file tree actions', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-binary-roundtrip-${runId}`
+  const originalPath = `attachments-${runId}/archive.data`
+  const renamedName = `archive-renamed-${runId}.data`
+  const renamedPath = `attachments-${runId}/${renamedName}`
+  const bytes = new Uint8Array([0, 255, 13, 42, 99, 7])
+  const expectedHash = await hashBytes(bytes)
+
+  await installTestUserHeader(page, userId)
+  await page.goto('/')
+  await expect(page).toHaveTitle('Note')
+  await waitForSyncIdle(page)
+
+  await createRemoteBinaryFileOnServer(request, originalPath, bytes, userId)
+  await reloadAndWaitForSync(page)
+
+  await ensureFileIsOpen(page, originalPath)
+  await expect(page.locator('.editor-attachment-panel')).toBeVisible()
+  await expect(page.locator('.editor-attachment-panel')).toContainText('This file cannot be edited in Monaco.')
+  await expect(page.locator('.editor-image-preview-panel')).toHaveCount(0)
+  await expect(page.locator('.editor-attachment-meta')).toContainText('6 B')
+
+  const originalButton = page.getByRole('button', { name: 'archive.data', exact: true })
+
+  await originalButton.focus()
+  await page.getByRole('button', { name: `Rename ${originalPath}`, exact: true }).click()
+
+  const renameInput = page.locator('.tree-row-editor input')
+  await expect(renameInput).toHaveValue('archive.data')
+  await renameInput.fill(renamedName)
+  await renameInput.press('Enter')
+  await waitForSyncIdle(page)
+
+  await expect(page.getByRole('button', { name: 'archive.data', exact: true })).toHaveCount(0)
+  await ensureFileIsOpen(page, renamedPath)
+  await expect.poll(async () => await getRemoteFile(request, originalPath, userId)).toMatchObject({
+    path: originalPath,
+    content: null,
+    contentHash: null,
+    deletedAt: expect.any(String),
+  })
+  await expect.poll(async () => await getRemoteFile(request, renamedPath, userId)).toMatchObject({
+    path: renamedPath,
+    contentHash: expectedHash,
+    content: {
+      encoding: 'blob',
+      hash: expectedHash,
+      size: bytes.byteLength,
+    },
+  })
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toBe(`Delete ${renamedPath}?`)
+    await dialog.accept()
+  })
+  await page.getByRole('button', { name: `Delete ${renamedPath}`, exact: true }).click()
+  await waitForSyncIdle(page)
+
+  await expect(page.getByRole('button', { name: renamedName, exact: true })).toHaveCount(0)
+  await expect.poll(async () => await getRemoteFile(request, renamedPath, userId)).toMatchObject({
+    path: renamedPath,
+    content: null,
+    contentHash: null,
+    deletedAt: expect.any(String),
+  })
 })
 
 test('renders local markdown image references inline inside Monaco', async ({ page, request }) => {

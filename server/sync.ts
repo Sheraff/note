@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { comparePaths } from './files.ts'
-import { getCurrentSyncCursor, getNextSyncCursor, listFiles, listFilesSinceCursor, upsertFile } from './db.ts'
+import { getBlobSize, getCurrentSyncCursor, getNextSyncCursor, listFiles, listFilesSinceCursor, upsertFile } from './db.ts'
 import { type FileContent, type RemoteFile, type SyncBaseEntry, type SyncChange, type SyncConflict } from './schemas.ts'
 
 function baseMatchesRemote(remote: RemoteFile | undefined, base: SyncBaseEntry | null): boolean {
@@ -23,10 +23,22 @@ function baseMatchesRemote(remote: RemoteFile | undefined, base: SyncBaseEntry |
 function hashFileContent(content: FileContent): string {
   return content.encoding === 'text'
     ? createHash('sha256').update(content.value).digest('hex')
-    : createHash('sha256').update(Buffer.from(content.value, 'base64')).digest('hex')
+    : content.hash
 }
 
 function createRemoteFile(path: string, content: FileContent, updatedAt: string): RemoteFile {
+  if (content.encoding === 'blob') {
+    const blobSize = getBlobSize(content.hash)
+
+    if (blobSize === null) {
+      throw new Error(`Missing blob ${content.hash} for ${path}`)
+    }
+
+    if (blobSize !== content.size) {
+      throw new Error(`Blob size mismatch for ${path}`)
+    }
+  }
+
   return {
     path,
     content,
@@ -58,7 +70,19 @@ function areSameFileContent(left: FileContent | null, right: FileContent | null)
     return left === right
   }
 
-  return left.encoding === right.encoding && left.value === right.value
+  if (left.encoding !== right.encoding) {
+    return false
+  }
+
+  if (left.encoding === 'text' && right.encoding === 'text') {
+    return left.value === right.value
+  }
+
+  if (left.encoding === 'blob' && right.encoding === 'blob') {
+    return left.hash === right.hash && left.size === right.size
+  }
+
+  return false
 }
 
 export function applyChangesToSnapshot(currentFiles: RemoteFile[], changes: SyncChange[]): {

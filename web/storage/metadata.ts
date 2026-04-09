@@ -10,13 +10,29 @@ import {
 } from '../schemas.ts'
 
 const DATABASE_NAME = 'note-metadata'
-const DATABASE_VERSION = 1
+const DATABASE_VERSION = 2
 const SETTINGS_STORE = 'settings'
 const HANDLES_STORE = 'handles'
 const SYNC_STORE = 'sync'
+const LOCAL_FILE_INDEX_STORE = 'local-file-index'
 const APP_SETTINGS_KEY = 'app-settings'
 const DIRECTORY_HANDLE_KEY = 'directory-handle'
+const DIRECTORY_STORAGE_ID_KEY = 'directory-storage-id'
 const SYNC_STATE_KEY = 'sync-state'
+
+const LocalFileIndexEntrySchema = v.object({
+  path: v.string(),
+  contentHash: v.string(),
+  updatedAt: v.string(),
+  size: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  lastModified: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  format: v.picklist(['text', 'binary']),
+  mimeType: v.nullable(v.string()),
+})
+
+const DirectoryStorageIdSchema = v.pipe(v.string(), v.minLength(1))
+
+export type LocalFileIndexEntry = v.InferOutput<typeof LocalFileIndexEntrySchema>
 
 function getScopedKey(userId: string, key: string): string {
   return `${userId}:${key}`
@@ -67,6 +83,10 @@ function openDatabase(): Promise<IDBDatabase> {
 
       if (!database.objectStoreNames.contains(SYNC_STORE)) {
         database.createObjectStore(SYNC_STORE)
+      }
+
+      if (!database.objectStoreNames.contains(LOCAL_FILE_INDEX_STORE)) {
+        database.createObjectStore(LOCAL_FILE_INDEX_STORE)
       }
     }
 
@@ -140,6 +160,20 @@ export async function setDirectoryHandle(userId: string, handle: FileSystemDirec
   await writeValue(HANDLES_STORE, getScopedKey(userId, DIRECTORY_HANDLE_KEY), v.parse(v.nullable(DirectoryHandleSchema), handle))
 }
 
+export async function getDirectoryStorageId(userId: string): Promise<string | null> {
+  const value = await readValue(HANDLES_STORE, getScopedKey(userId, DIRECTORY_STORAGE_ID_KEY))
+
+  if (value === undefined) {
+    return null
+  }
+
+  return v.parse(v.nullable(DirectoryStorageIdSchema), value)
+}
+
+export async function setDirectoryStorageId(userId: string, storageId: string | null): Promise<void> {
+  await writeValue(HANDLES_STORE, getScopedKey(userId, DIRECTORY_STORAGE_ID_KEY), v.parse(v.nullable(DirectoryStorageIdSchema), storageId))
+}
+
 export async function getSyncState(userId: string): Promise<SyncState> {
   const value = await readValue(SYNC_STORE, getScopedKey(userId, SYNC_STATE_KEY))
 
@@ -157,4 +191,18 @@ export async function getSyncState(userId: string): Promise<SyncState> {
 
 export async function setSyncState(userId: string, syncState: SyncState): Promise<void> {
   await writeValue(SYNC_STORE, getScopedKey(userId, SYNC_STATE_KEY), v.parse(SyncStateSchema, syncState))
+}
+
+export async function getLocalFileIndex(storageCacheKey: string): Promise<LocalFileIndexEntry[]> {
+  const value = await readValue(LOCAL_FILE_INDEX_STORE, storageCacheKey)
+
+  if (value === undefined) {
+    return []
+  }
+
+  return v.parse(v.array(LocalFileIndexEntrySchema), value)
+}
+
+export async function setLocalFileIndex(storageCacheKey: string, entries: LocalFileIndexEntry[]): Promise<void> {
+  await writeValue(LOCAL_FILE_INDEX_STORE, storageCacheKey, v.parse(v.array(LocalFileIndexEntrySchema), entries))
 }

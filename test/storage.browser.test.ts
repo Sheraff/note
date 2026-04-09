@@ -356,7 +356,7 @@ async function deletePickedFolderEntry(page: Page, path: string): Promise<void> 
 
 async function readStoredAppSettings(page: Page, userId: string): Promise<{ backend: string; lastOpenedPath: string | null } | null> {
   return page.evaluate(async (currentUserId) => {
-    const request = indexedDB.open('note-metadata', 1)
+    const request = indexedDB.open('note-metadata')
 
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
       request.onsuccess = () => resolve(request.result)
@@ -401,7 +401,7 @@ async function updateStoredAppSettings(
   }>,
 ): Promise<void> {
   await page.evaluate(async ({ currentUserId, nextUpdates }) => {
-    const request = indexedDB.open('note-metadata', 1)
+    const request = indexedDB.open('note-metadata')
 
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
       request.onsuccess = () => resolve(request.result)

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { copyStorageEntries, getStorageTransferConflicts, replaceStorageEntries } from '../web/storage/transfer.ts'
-import { createStoredTextFile, type ListedEntry, type NoteStorage, type StoredTextFile } from '../web/storage/types.ts'
+import { createStoredBinaryFile, createStoredTextFile, type ListedEntry, type NoteStorage, type StoredFile, type StoredTextFile } from '../web/storage/types.ts'
 
 type MemoryEntry =
   | {
@@ -10,7 +10,7 @@ type MemoryEntry =
   | {
       kind: 'file'
       path: string
-      content: string
+      content: string | Uint8Array
     }
 
 const DEFAULT_UPDATED_AT = '2026-04-07T00:00:00.000Z'
@@ -40,13 +40,22 @@ function createStoredFile(path: string, content: string): StoredTextFile {
   })
 }
 
+function createStoredBinaryMemoryFile(path: string, content: Uint8Array): StoredFile {
+  return createStoredBinaryFile({
+    path,
+    content,
+    contentHash: `hash:${path}:${[...content].join(',')}`,
+    updatedAt: DEFAULT_UPDATED_AT,
+  })
+}
+
 function sortEntries(entries: ListedEntry[]): ListedEntry[] {
   return [...entries].sort((left, right) => left.path.localeCompare(right.path) || left.kind.localeCompare(right.kind))
 }
 
 function createMemoryStorage(seedEntries: MemoryEntry[] = []): NoteStorage {
   const directories = new Set<string>()
-  const files = new Map<string, string>()
+  const files = new Map<string, string | Uint8Array>()
 
   function ensureDirectory(path: string): void {
     if (path.length === 0) {
@@ -78,6 +87,7 @@ function createMemoryStorage(seedEntries: MemoryEntry[] = []): NoteStorage {
 
   return {
     key: 'opfs',
+    cacheKey: 'memory-transfer',
     label: 'Memory',
     async listEntries() {
       return sortEntries([
@@ -85,12 +95,36 @@ function createMemoryStorage(seedEntries: MemoryEntry[] = []): NoteStorage {
         ...[...files.keys()].map((path) => ({ kind: 'file' as const, path })),
       ])
     },
+    async listFileStats() {
+      return [...files.entries()].map(([path, content]) => ({
+        path,
+        size: typeof content === 'string' ? new TextEncoder().encode(content).length : content.byteLength,
+        lastModified: Date.parse(DEFAULT_UPDATED_AT),
+      }))
+    },
     async listFiles() {
-      return [...files.entries()].map(([path, content]) => createStoredFile(path, content))
+      return [...files.entries()].map(([path, content]) =>
+        typeof content === 'string' ? createStoredFile(path, content) : createStoredBinaryMemoryFile(path, content),
+      )
+    },
+    async readFile(path) {
+      const content = files.get(path)
+
+      if (content === undefined) {
+        return null
+      }
+
+      return typeof content === 'string' ? createStoredFile(path, content) : createStoredBinaryMemoryFile(path, content)
     },
     async readTextFile(path) {
       const content = files.get(path)
-      return content === undefined ? null : createStoredFile(path, content)
+      return content === undefined || typeof content !== 'string' ? null : createStoredFile(path, content)
+    },
+    async writeFile(path, file) {
+      ensureParents(path)
+      const content = file.format === 'text' ? file.content : Uint8Array.from(file.content)
+      files.set(path, content)
+      return file.format === 'text' ? createStoredFile(path, file.content) : createStoredBinaryMemoryFile(path, Uint8Array.from(file.content))
     },
     async writeTextFile(path, content) {
       ensureParents(path)
@@ -206,5 +240,20 @@ describe('storage transfer helpers', () => {
     expect(await destination.readTextFile('notes/current.md')).toMatchObject({ content: '# Current\n' })
     expect(await destination.readTextFile('notes/stale.md')).toBeNull()
     expect(await destination.readTextFile('archive/old.md')).toBeNull()
+  })
+
+  it('copies binary attachments without corrupting their bytes', async () => {
+    const binaryBytes = new Uint8Array([0, 255, 13, 42, 99, 7])
+    const source = createMemoryStorage([{ kind: 'file', path: 'attachments/archive.data', content: binaryBytes }])
+    const destination = createMemoryStorage()
+
+    await copyStorageEntries(source, destination)
+
+    expect(await destination.readTextFile('attachments/archive.data')).toBeNull()
+    await expect(destination.readFile?.('attachments/archive.data')).resolves.toMatchObject({
+      format: 'binary',
+      contentHash: `hash:attachments/archive.data:${[...binaryBytes].join(',')}`,
+      size: binaryBytes.byteLength,
+    })
   })
 })

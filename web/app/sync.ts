@@ -3,7 +3,16 @@ import type { NoteConflict, SaveCurrentNoteResult } from './notes.ts'
 import type { SyncState } from '#web/schemas.ts'
 import { pullRemoteChanges, syncWithServer } from '#web/notes/sync.ts'
 import { setSyncState } from '#web/storage/metadata.ts'
-import { isTextStoredFile, readStoredFile, toWriteFileInput, writeStoredFile, type NoteStorage, type StoredFile } from '#web/storage/types.ts'
+import {
+  isRemoteBlobFile,
+  isTextStoredFile,
+  readStoredFile,
+  toWriteFileInput,
+  writeStoredFile,
+  type NoteStorage,
+  type RemoteBlobFile,
+  type StoredFile,
+} from '#web/storage/types.ts'
 
 const api = createApiClient()
 
@@ -50,8 +59,12 @@ async function persistSyncState(context: SyncContext, syncState: SyncState): Pro
   await setSyncState(context.userId(), syncState)
 }
 
-function createSyncNoteConflict(path: string, mineFile: StoredFile | null, theirsFile: StoredFile | null): NoteConflict {
-  if (mineFile?.format !== 'binary' && theirsFile?.format !== 'binary') {
+function createSyncNoteConflict(
+  path: string,
+  mineFile: StoredFile | null,
+  theirsFile: StoredFile | RemoteBlobFile | null,
+): NoteConflict {
+  if (mineFile?.format !== 'binary' && (theirsFile === null || (!isRemoteBlobFile(theirsFile) && theirsFile.format !== 'binary'))) {
     return {
       kind: 'text',
       path,
@@ -75,7 +88,11 @@ function createSyncNoteConflict(path: string, mineFile: StoredFile | null, their
 }
 
 async function writeConflictSourceVersion(storage: NoteStorage, conflict: NoteConflict): Promise<void> {
-  if (conflict.diskFile !== null) {
+  if (conflict.kind === 'file' && isRemoteBlobFile(conflict.diskFile)) {
+    return
+  }
+
+  if (conflict.diskFile !== null && !isRemoteBlobFile(conflict.diskFile)) {
     await writeStoredFile(storage, conflict.path, toWriteFileInput(conflict.diskFile))
     return
   }

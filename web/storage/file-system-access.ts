@@ -8,6 +8,7 @@ import {
   type ListedEntry,
   type NoteStorage,
   type StoredFile,
+  type StoredFileStat,
   type WriteFileInput,
 } from './types.ts'
 
@@ -97,6 +98,33 @@ async function listDirectory(directory: FileSystemDirectoryHandle, prefix = ''):
   }
 
   return entries
+}
+
+async function listFileStatsInDirectory(directory: FileSystemDirectoryHandle, prefix = ''): Promise<StoredFileStat[]> {
+  const stats: StoredFileStat[] = []
+
+  for await (const [name, handle] of directory.entries()) {
+    const nextPath = prefix.length > 0 ? `${prefix}/${name}` : name
+
+    if (handle.kind === 'file' && isDotStorePath(nextPath)) {
+      continue
+    }
+
+    if (handle.kind === 'directory') {
+      stats.push(...(await listFileStatsInDirectory(handle, nextPath)))
+      continue
+    }
+
+    const file = await handle.getFile()
+
+    stats.push({
+      path: nextPath,
+      size: file.size,
+      lastModified: file.lastModified,
+    })
+  }
+
+  return stats
 }
 
 async function readStoredFileContent(root: FileSystemDirectoryHandle, path: string): Promise<StoredFile> {
@@ -232,12 +260,16 @@ export async function requestDirectoryPermission(handle: FileSystemDirectoryHand
   return (await handle.requestPermission({ mode: 'readwrite' })) === 'granted'
 }
 
-export function createDirectoryStorage(root: FileSystemDirectoryHandle): NoteStorage {
+export function createDirectoryStorage(root: FileSystemDirectoryHandle, cacheKey = `directory:${root.name}`): NoteStorage {
   return {
     key: 'directory',
+    cacheKey,
     label: root.name,
     async listEntries() {
       return listDirectory(root)
+    },
+    async listFileStats() {
+      return listFileStatsInDirectory(root)
     },
     async listFiles() {
       const entries = await listDirectory(root)

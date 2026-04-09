@@ -24,8 +24,10 @@ const {
   requestDirectoryPermissionMock,
   getAppSettingsMock,
   getDirectoryHandleMock,
+  getDirectoryStorageIdMock,
   getSyncStateMock,
   setDirectoryHandleMock,
+  setDirectoryStorageIdMock,
   createOpfsStorageMock,
 } = vi.hoisted(() => ({
   createDirectoryStorageMock: vi.fn(),
@@ -34,8 +36,10 @@ const {
   requestDirectoryPermissionMock: vi.fn(),
   getAppSettingsMock: vi.fn(),
   getDirectoryHandleMock: vi.fn(),
+  getDirectoryStorageIdMock: vi.fn(),
   getSyncStateMock: vi.fn(),
   setDirectoryHandleMock: vi.fn(),
+  setDirectoryStorageIdMock: vi.fn(),
   createOpfsStorageMock: vi.fn(),
 }))
 
@@ -49,8 +53,10 @@ vi.mock('../web/storage/file-system-access.ts', () => ({
 vi.mock('../web/storage/metadata.ts', () => ({
   getAppSettings: getAppSettingsMock,
   getDirectoryHandle: getDirectoryHandleMock,
+  getDirectoryStorageId: getDirectoryStorageIdMock,
   getSyncState: getSyncStateMock,
   setDirectoryHandle: setDirectoryHandleMock,
+  setDirectoryStorageId: setDirectoryStorageIdMock,
 }))
 
 vi.mock('../web/storage/opfs.ts', () => ({
@@ -60,8 +66,12 @@ vi.mock('../web/storage/opfs.ts', () => ({
 function createStorage(key: NoteStorage['key'], label: string): NoteStorage {
   return {
     key,
+    cacheKey: `${key}:${label}`,
     label,
     async listEntries() {
+      return []
+    },
+    async listFileStats() {
       return []
     },
     async listFiles() {
@@ -608,6 +618,7 @@ describe('workspace storage bootstrap', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    getDirectoryStorageIdMock.mockResolvedValue('directory-storage-id')
     getSyncStateMock.mockResolvedValue(syncState)
   })
 
@@ -633,7 +644,8 @@ describe('workspace storage bootstrap', () => {
     expect(context.setSettings).toHaveBeenCalledWith(settings)
     expect(context.setSyncState).toHaveBeenCalledWith(syncState)
     expect(queryDirectoryPermissionMock).toHaveBeenCalledWith(handle)
-    expect(createDirectoryStorageMock).toHaveBeenCalledWith(handle)
+    expect(getDirectoryStorageIdMock).toHaveBeenCalledWith(TEST_USER_ID)
+    expect(createDirectoryStorageMock).toHaveBeenCalledWith(handle, 'directory-storage-id')
     expect(context.setStorage).toHaveBeenCalledWith(directoryStorage)
     expect(context.refreshWorkspace).toHaveBeenCalledWith('notes/today.md')
     expect(context.setReconnectableDirectoryName).toHaveBeenCalledWith(null)
@@ -697,6 +709,8 @@ describe('workspace storage bootstrap', () => {
 describe('workspace attach', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    getDirectoryHandleMock.mockResolvedValue(null)
+    getDirectoryStorageIdMock.mockResolvedValue(null)
   })
 
   it('persists the picked folder handle and activates directory storage', async () => {
@@ -720,8 +734,11 @@ describe('workspace attach', () => {
 
     expect(pickDirectoryHandleMock).toHaveBeenCalledTimes(1)
     expect(requestDirectoryPermissionMock).toHaveBeenCalledWith(handle)
+    expect(getDirectoryHandleMock).toHaveBeenCalledWith(TEST_USER_ID)
+    expect(getDirectoryStorageIdMock).toHaveBeenCalledWith(TEST_USER_ID)
     expect(setDirectoryHandleMock).toHaveBeenCalledWith(TEST_USER_ID, handle)
-    expect(createDirectoryStorageMock).toHaveBeenCalledWith(handle)
+    expect(setDirectoryStorageIdMock).toHaveBeenCalledWith(TEST_USER_ID, expect.any(String))
+    expect(createDirectoryStorageMock).toHaveBeenCalledWith(handle, expect.any(String))
     expect(context.setErrorMessage).toHaveBeenCalledWith(null)
     expect(context.setReconnectableDirectoryName).toHaveBeenCalledWith(null)
     expect(context.setStorage).toHaveBeenCalledWith(directoryStorage)
@@ -737,6 +754,7 @@ describe('workspace attach', () => {
 describe('workspace reconnect', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    getDirectoryStorageIdMock.mockResolvedValue('directory-storage-id')
   })
 
   it('throws when no saved folder handle is available to reconnect', async () => {
@@ -771,7 +789,8 @@ describe('workspace reconnect', () => {
     expect(getDirectoryHandleMock).toHaveBeenCalledTimes(1)
     expect(getDirectoryHandleMock).toHaveBeenCalledWith(TEST_USER_ID)
     expect(requestDirectoryPermissionMock).toHaveBeenCalledWith(handle)
-    expect(createDirectoryStorageMock).toHaveBeenCalledWith(handle)
+    expect(getDirectoryStorageIdMock).toHaveBeenCalledWith(TEST_USER_ID)
+    expect(createDirectoryStorageMock).toHaveBeenCalledWith(handle, 'directory-storage-id')
     expect(context.setErrorMessage).toHaveBeenCalledWith(null)
     expect(context.setReconnectableDirectoryName).toHaveBeenCalledWith(null)
     expect(context.setStorage).toHaveBeenCalledWith(directoryStorage)

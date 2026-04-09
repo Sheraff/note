@@ -5,6 +5,12 @@ export type ListedEntry = {
   path: string
 }
 
+export type StoredFileStat = {
+  path: string
+  size: number
+  lastModified: number
+}
+
 type StoredFileBase = {
   path: string
   contentHash: string
@@ -25,6 +31,15 @@ export type StoredBinaryFile = StoredFileBase & {
 
 export type StoredFile = StoredTextFile | StoredBinaryFile
 
+export type RemoteBlobFile = {
+  kind: 'remote-blob'
+  path: string
+  contentHash: string
+  updatedAt: string
+  size: number
+  mimeType?: string | null
+}
+
 export type WriteFileInput =
   | {
       format: 'text'
@@ -41,8 +56,10 @@ export type StoredFileViewKind = 'text' | 'image' | 'attachment'
 
 export type NoteStorage = {
   key: 'opfs' | 'directory'
+  cacheKey?: string
   label: string
   listEntries(): Promise<ListedEntry[]>
+  listFileStats?(): Promise<StoredFileStat[]>
   listFiles(): Promise<StoredFile[]>
   readFile?(path: string): Promise<StoredFile | null>
   writeFile?(path: string, file: WriteFileInput): Promise<StoredFile>
@@ -75,6 +92,10 @@ export async function writeStoredFile(storage: NoteStorage, path: string, file: 
 
 export function isTextStoredFile(file: StoredFile | null | undefined): file is StoredTextFile {
   return file !== null && file !== undefined && file.format === 'text'
+}
+
+export function isRemoteBlobFile(file: StoredFile | RemoteBlobFile | null | undefined): file is RemoteBlobFile {
+  return file !== null && file !== undefined && 'kind' in file && file.kind === 'remote-blob'
 }
 
 export function toWriteFileInput(file: StoredFile): WriteFileInput {

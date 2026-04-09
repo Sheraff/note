@@ -7,6 +7,7 @@ import {
   type ListedEntry,
   type NoteStorage,
   type StoredFile,
+  type StoredFileStat,
   type WriteFileInput,
 } from './types.ts'
 
@@ -101,6 +102,33 @@ async function listDirectory(directory: FileSystemDirectoryHandle, prefix = ''):
   }
 
   return entries
+}
+
+async function listFileStatsInDirectory(directory: FileSystemDirectoryHandle, prefix = ''): Promise<StoredFileStat[]> {
+  const stats: StoredFileStat[] = []
+
+  for await (const [name, handle] of directory.entries()) {
+    const nextPath = prefix.length > 0 ? `${prefix}/${name}` : name
+
+    if (handle.kind === 'file' && isDotStorePath(nextPath)) {
+      continue
+    }
+
+    if (handle.kind === 'directory') {
+      stats.push(...(await listFileStatsInDirectory(handle, nextPath)))
+      continue
+    }
+
+    const file = await handle.getFile()
+
+    stats.push({
+      path: nextPath,
+      size: file.size,
+      lastModified: file.lastModified,
+    })
+  }
+
+  return stats
 }
 
 async function readStoredFileContent(root: FileSystemDirectoryHandle, path: string): Promise<StoredFile> {
@@ -217,9 +245,13 @@ async function renameEntryAtPath(
 export function createOpfsStorage(): NoteStorage {
   return {
     key: 'opfs',
+    cacheKey: 'opfs',
     label: 'OPFS',
     async listEntries() {
       return listDirectory(await getRootDirectory())
+    },
+    async listFileStats() {
+      return listFileStatsInDirectory(await getRootDirectory())
     },
     async listFiles() {
       const entries = await listDirectory(await getRootDirectory())

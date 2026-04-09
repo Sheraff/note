@@ -15,6 +15,7 @@ import {
   readStoredFile,
   type ListedEntry,
   type NoteStorage,
+  type RemoteBlobFile,
   type StoredFile,
   type StoredTextFile,
 } from '#web/storage/types.ts'
@@ -34,7 +35,7 @@ export type FileNoteConflict = {
   path: string
   preferredMode: 'popover'
   localFile: StoredFile | null
-  diskFile: StoredFile | null
+  diskFile: StoredFile | RemoteBlobFile | null
   loadedSnapshot: StoredFile | null
   source: 'local' | 'remote'
 }
