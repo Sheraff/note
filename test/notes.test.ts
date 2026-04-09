@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createFolder, moveEntry, refreshWorkspace, renameEntry, saveCurrentNote, type NoteConflict, type NoteContext } from '../web/app/notes.ts'
+import { createFolder, createNote, moveEntry, refreshWorkspace, renameEntry, saveCurrentNote, type NoteConflict, type NoteContext } from '../web/app/notes.ts'
 import { hashContent } from '../web/notes/hashes.ts'
 import { DEFAULT_APP_SETTINGS, type AppSettings } from '../web/schemas.ts'
 import type { ListedEntry, NoteStorage, StoredFile } from '../web/storage/types.ts'
@@ -113,6 +113,88 @@ describe('inline create errors', () => {
 
     expect(message).toBe('Enter a valid folder path.')
     expect(currentError).toBeNull()
+  })
+
+  it('creates a non-markdown file without appending .md', async () => {
+    const path = 'notes/config.json'
+    const storedFile = await createStoredFile(path, '', '2026-04-08T10:00:00.000Z')
+    const writeTextFile = vi.fn(async (nextPath: string, content: string) => createStoredFile(nextPath, content, '2026-04-08T10:00:00.000Z'))
+    const storage: NoteStorage = {
+      key: 'directory',
+      label: 'Notes',
+      async listEntries() {
+        return [{ kind: 'file', path }]
+      },
+      async listFiles() {
+        return [storedFile]
+      },
+      async readTextFile(nextPath) {
+        return nextPath === path ? storedFile : null
+      },
+      writeTextFile,
+      async deleteEntry() {},
+      async createDirectory() {},
+      async renameEntry() {},
+    }
+
+    const message = await createNote(createMockContext(storage, () => {}), 'notes', 'config.json')
+
+    expect(message).toBeNull()
+    expect(writeTextFile).toHaveBeenCalledWith(path, '')
+  })
+
+  it('defaults new files without an extension to markdown', async () => {
+    const path = 'notes/plan.md'
+    const storedFile = await createStoredFile(path, '', '2026-04-08T10:00:00.000Z')
+    const writeTextFile = vi.fn(async (nextPath: string, content: string) => createStoredFile(nextPath, content, '2026-04-08T10:00:00.000Z'))
+    const storage: NoteStorage = {
+      key: 'directory',
+      label: 'Notes',
+      async listEntries() {
+        return [{ kind: 'file', path }]
+      },
+      async listFiles() {
+        return [storedFile]
+      },
+      async readTextFile(nextPath) {
+        return nextPath === path ? storedFile : null
+      },
+      writeTextFile,
+      async deleteEntry() {},
+      async createDirectory() {},
+      async renameEntry() {},
+    }
+
+    const message = await createNote(createMockContext(storage, () => {}), 'notes', 'plan')
+
+    expect(message).toBeNull()
+    expect(writeTextFile).toHaveBeenCalledWith(path, '')
+  })
+
+  it('rejects creating .DS_Store as a note', async () => {
+    const writeTextFile = vi.fn(async (path: string, content: string) => createStoredFile(path, content, '2026-04-08T10:00:00.000Z'))
+    const storage: NoteStorage = {
+      key: 'directory',
+      label: 'Notes',
+      async listEntries() {
+        return []
+      },
+      async listFiles() {
+        return []
+      },
+      async readTextFile() {
+        return null
+      },
+      writeTextFile,
+      async deleteEntry() {},
+      async createDirectory() {},
+      async renameEntry() {},
+    }
+
+    const message = await createNote(createMockContext(storage, () => {}), null, '.DS_Store')
+
+    expect(message).toBe('Enter a valid note path.')
+    expect(writeTextFile).not.toHaveBeenCalled()
   })
 
   it('returns note rename failures without leaving a global error banner', async () => {

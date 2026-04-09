@@ -370,17 +370,22 @@ async function reloadAndWaitForSync(page: Page): Promise<void> {
   await waitForSyncIdle(page)
 }
 
+function getCreatedNotePath(name: string): string {
+  const fileName = name.split('/').pop() ?? name
+
+  return fileName.includes('.') ? name : `${name}.md`
+}
+
 async function createNoteFromSidebar(page: Page, name: string): Promise<string> {
   await page.getByRole('button', { name: 'New note', exact: true }).click()
   await page.locator('.tree-row-editor input').fill(name)
   await page.locator('.tree-row-editor input').press('Enter')
 
-  const notePath = `${name}.md`
+  const notePath = getCreatedNotePath(name)
   const noteButton = page.getByRole('button', { name: notePath, exact: true })
 
   await expect(noteButton).toBeVisible()
   await expect(noteButton).toHaveAttribute('aria-current', 'true')
-  await expectEditorToContain(page, '# Untitled')
   await waitForSyncIdle(page)
 
   return notePath
@@ -505,7 +510,7 @@ test('auto-syncs exactly once after an editor save', async ({ page, request }) =
   await waitForSyncIdle(page)
 
   await createNoteFromSidebar(page, noteName)
-  await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe('# Untitled\n')
+  await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe('')
 
   const syncRequests = await countSyncRequestsDuring(page, async () => {
     await replaceEditorContent(page, updatedContent)
@@ -513,6 +518,24 @@ test('auto-syncs exactly once after an editor save', async ({ page, request }) =
 
   expect(syncRequests).toEqual({ manifest: 0, push: 1 })
   await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe(updatedContent)
+})
+
+test('creates a .json note without rewriting it to .md', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-json-${runId}`
+  const notePath = `config-${runId}.json`
+
+  await installTestUserHeader(page, userId)
+  await page.goto('/')
+  await expect(page).toHaveTitle('Note')
+  await waitForSyncIdle(page)
+
+  const createdPath = await createNoteFromSidebar(page, notePath)
+
+  expect(createdPath).toBe(notePath)
+  await expect(page.locator('.statusbar-language')).toContainText('json')
+  await expect(page.locator('.statusbar-language .seti-icon svg')).toHaveCount(1)
+  await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe('')
 })
 
 test('persists only sync metadata in IndexedDB, not note contents', async ({ page, request }) => {
@@ -775,7 +798,7 @@ test('flushes a pending save into the create-note sync without a second push', a
 
   expect(syncRequests).toEqual({ manifest: 0, push: 1 })
   await expect.poll(async () => (await getRemoteFile(request, existingPath, userId))?.content ?? null).toBe(updatedContent)
-  await expect.poll(async () => (await getRemoteFile(request, newNotePath, userId))?.content ?? null).toBe('# Untitled\n')
+  await expect.poll(async () => (await getRemoteFile(request, newNotePath, userId))?.content ?? null).toBe('')
 })
 
 test('flushes a pending save into the rename sync without a second push', async ({ page, request }) => {
@@ -1183,7 +1206,7 @@ test('syncs exactly once when saving with the keyboard shortcut', async ({ page,
   await waitForSyncIdle(page)
 
   await createNoteFromSidebar(page, noteName)
-  await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe('# Untitled\n')
+  await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe('')
 
   const syncRequests = await countSyncRequestsDuring(page, async () => {
     await replaceEditorContent(page, updatedContent)
@@ -1207,7 +1230,7 @@ test('syncs exactly once when saving with the global keyboard shortcut outside M
   await waitForSyncIdle(page)
 
   await createNoteFromSidebar(page, noteName)
-  await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe('# Untitled\n')
+  await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe('')
 
   const syncRequests = await countSyncRequestsDuring(page, async () => {
     await replaceEditorContent(page, updatedContent)
@@ -1238,7 +1261,7 @@ test('syncs exactly once when using the manual sync keyboard shortcut', async ({
   })
 
   expect(syncRequests).toEqual({ manifest: 0, push: 1 })
-  await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe('# Untitled\n')
+  await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe('')
 })
 
 test('does not sync when a pending autosave hits a local file conflict', async ({ page, request }) => {
@@ -1327,7 +1350,7 @@ test('keeps workspace changes dirty until a full sync succeeds, then falls back 
   await waitForSyncIdle(page)
 
   await createNoteFromSidebar(page, noteName)
-  await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe('# Untitled\n')
+  await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe('')
 
   await page.route('**/api/sync/push', async (route) => {
     if (remainingPushFailures > 0) {
@@ -1349,7 +1372,7 @@ test('keeps workspace changes dirty until a full sync succeeds, then falls back 
 
   expect(failedSyncRequests).toEqual({ manifest: 0, push: 1 })
   await expect(page.locator('.statusbar-message')).toHaveText('Request failed with 500')
-  await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe('# Untitled\n')
+  await expect.poll(async () => (await getRemoteFile(request, notePath, userId))?.content ?? null).toBe('')
 
   await advanceDateNow(page, 11_000)
 

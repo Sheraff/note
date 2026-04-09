@@ -38,7 +38,7 @@ export function createConflictCopyPath(path: string, timestamp: string, attempt 
 export function ensureMarkdownExtension(path: string): string {
   const normalized = normalizeNotePath(path)
 
-  if (normalized.endsWith('.md')) {
+  if (getName(normalized).includes('.')) {
     return normalized
   }
 

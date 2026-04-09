@@ -602,6 +602,18 @@ describe('NotesSidebar', () => {
     })
   })
 
+  it('preserves an explicit non-markdown extension when creating a note', async () => {
+    const { props } = renderSidebar()
+
+    fireEvent.click(screen.getByRole('button', { name: 'New note' }))
+    fireEvent.input(getTextbox(), { target: { value: 'config.json' } })
+    fireEvent.keyDown(getTextbox(), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(props.onCreateNote).toHaveBeenCalledWith(null, 'config.json', 'enter')
+    })
+  })
+
   it('submits root folder creation on Enter', async () => {
     const { props } = renderSidebar()
 

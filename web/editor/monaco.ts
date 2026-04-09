@@ -38,9 +38,25 @@ self.MonacoEnvironment = {
 
 export type MonacoController = {
   getValue(): string
+  getLanguageId(): string
   setValue(value: string): void
+  setPath(path: string | null): void
   focus(): void
   dispose(): void
+}
+
+const DEFAULT_EDITOR_PATH = 'untitled.md'
+
+function createModelUri(path: string | null, fragment?: string): monaco.Uri {
+  return monaco.Uri.from({
+    scheme: 'file',
+    path: `/${path ?? DEFAULT_EDITOR_PATH}`,
+    fragment,
+  })
+}
+
+function createTextModel(value: string, path: string | null, fragment?: string): monaco.editor.ITextModel {
+  return monaco.editor.createModel(value, undefined, createModelUri(path, fragment))
 }
 
 function createEditorOptions(options: { topPadding?: number } = {}) {
@@ -66,16 +82,18 @@ export function createMonacoEditor(
   element: HTMLElement,
   options: {
     initialValue: string
+    path: string | null
     onChange(value: string): void
   },
 ): MonacoController {
   let isApplyingValue = false
+  let currentPath = options.path
 
   void ensureMonaspaceFont()
 
+  let model = createTextModel(options.initialValue, currentPath)
   const editor = monaco.editor.create(element, {
-    value: options.initialValue,
-    language: 'markdown',
+    model,
     ...createEditorOptions(),
   })
 
@@ -94,22 +112,37 @@ export function createMonacoEditor(
 
   return {
     getValue() {
-      return editor.getValue()
+      return model.getValue()
+    },
+    getLanguageId() {
+      return model.getLanguageId()
     },
     setValue(value) {
-      if (editor.getValue() === value) {
+      if (model.getValue() === value) {
         return
       }
 
       isApplyingValue = true
-      editor.setValue(value)
+      model.setValue(value)
       isApplyingValue = false
+    },
+    setPath(path) {
+      if (currentPath === path) {
+        return
+      }
+
+      const nextModel = createTextModel(model.getValue(), path)
+      editor.setModel(nextModel)
+      model.dispose()
+      model = nextModel
+      currentPath = path
     },
     focus() {
       editor.focus()
     },
     dispose() {
       editor.dispose()
+      model.dispose()
     },
   }
 }
@@ -119,17 +152,19 @@ export function createMonacoDiffEditor(
   options: {
     originalValue: string
     modifiedValue: string
+    path: string | null
     originalLabel: string
     modifiedLabel: string
     onChange(value: string): void
   },
 ): MonacoController {
   let isApplyingValue = false
+  let currentPath = options.path
 
   void ensureMonaspaceFont()
 
-  const originalModel = monaco.editor.createModel(options.originalValue, 'markdown')
-  const modifiedModel = monaco.editor.createModel(options.modifiedValue, 'markdown')
+  let originalModel = createTextModel(options.originalValue, currentPath, 'original')
+  let modifiedModel = createTextModel(options.modifiedValue, currentPath, 'modified')
   const editor = monaco.editor.createDiffEditor(element, {
     ...createEditorOptions({ topPadding: DIFF_LABEL_TOP_PADDING }),
     originalEditable: false,
@@ -154,7 +189,7 @@ export function createMonacoDiffEditor(
     editor.layout()
   })
 
-  modifiedModel.onDidChangeContent(() => {
+  let modifiedModelSubscription = modifiedModel.onDidChangeContent(() => {
     if (isApplyingValue) {
       return
     }
@@ -166,6 +201,9 @@ export function createMonacoDiffEditor(
     getValue() {
       return modifiedModel.getValue()
     },
+    getLanguageId() {
+      return modifiedModel.getLanguageId()
+    },
     setValue(value) {
       if (modifiedModel.getValue() === value) {
         return
@@ -175,11 +213,38 @@ export function createMonacoDiffEditor(
       modifiedModel.setValue(value)
       isApplyingValue = false
     },
+    setPath(path) {
+      if (currentPath === path) {
+        return
+      }
+
+      const nextOriginalModel = createTextModel(originalModel.getValue(), path, 'original')
+      const nextModifiedModel = createTextModel(modifiedModel.getValue(), path, 'modified')
+
+      modifiedModelSubscription.dispose()
+      editor.setModel({
+        original: nextOriginalModel,
+        modified: nextModifiedModel,
+      })
+      originalModel.dispose()
+      modifiedModel.dispose()
+      originalModel = nextOriginalModel
+      modifiedModel = nextModifiedModel
+      currentPath = path
+      modifiedModelSubscription = modifiedModel.onDidChangeContent(() => {
+        if (isApplyingValue) {
+          return
+        }
+
+        options.onChange(modifiedModel.getValue())
+      })
+    },
     focus() {
       modifiedEditor.focus()
     },
     dispose() {
       labelLayer.dispose()
+      modifiedModelSubscription.dispose()
       editor.dispose()
       originalModel.dispose()
       modifiedModel.dispose()

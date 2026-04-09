@@ -15,9 +15,11 @@ describe('note paths', () => {
     expect(normalizeNotePath('./bad-path')).toBe('')
   })
 
-  it('adds the markdown extension when needed', () => {
+  it('adds the markdown extension only when no extension is provided', () => {
     expect(ensureMarkdownExtension('notes/plan')).toBe('notes/plan.md')
     expect(ensureMarkdownExtension('notes/plan.md')).toBe('notes/plan.md')
+    expect(ensureMarkdownExtension('notes/config.json')).toBe('notes/config.json')
+    expect(ensureMarkdownExtension('notes/.env')).toBe('notes/.env')
     expect(joinNotePath('notes/daily', 'today.md')).toBe('notes/daily/today.md')
   })
 

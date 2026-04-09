@@ -2,6 +2,7 @@ import { Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import { ConflictActions, type ConflictActionLabels } from './ConflictActions.tsx'
 import './StatusBar.css'
 import { Codicon } from './Codicon.tsx'
+import { SetiIcon } from './SetiIcon.tsx'
 
 const relativeTimeFormat = new Intl.RelativeTimeFormat(undefined, {
   numeric: 'auto',
@@ -63,6 +64,8 @@ export function StatusBar(props: {
     labels: ConflictActionLabels
     message: string
   } | null
+  editorLanguage: string | null
+  editorPath: string
   errorMessage: string | null
   isSyncing: boolean
   isOpfsActive: boolean
@@ -178,6 +181,16 @@ export function StatusBar(props: {
             </button>
           </div>
         </div>
+        <span class="statusbar-language">
+          {props.editorLanguage === null ? (
+            <span>unknown</span>
+          ) : (
+            <>
+              <SetiIcon fileName={props.editorPath} />
+              <span>{props.editorLanguage}</span>
+            </>
+          )}
+        </span>
         <button
           type="button"
           class="statusbar-button"

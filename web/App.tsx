@@ -102,6 +102,7 @@ function App() {
   let editorElement: HTMLDivElement | undefined
   let editor: MonacoController | undefined
   let editorMode: EditorMode = 'plain'
+  let activeEditorPath: string | null = null
   let saveTimeout: number | undefined
   let autoSyncInterval: number | undefined
   let activeSyncOpenNoteSnapshots: Map<string, OpenNoteSyncSnapshot> | null = null
@@ -126,6 +127,7 @@ function App() {
   const [queuedNoteConflictsSignal, setQueuedNoteConflictsSignal] = createSignal<NoteConflict[]>([])
   const [isDiffMode, setIsDiffMode] = createSignal(false)
   const [hasUnsyncedWorkspaceChanges, setHasUnsyncedWorkspaceChanges] = createSignal(false)
+  const [editorLanguageId, setEditorLanguageId] = createSignal<string | null>(null)
 
   const tree = createMemo(() => buildTree(entries()))
   const fileCount = createMemo(() => entries().filter((entry) => entry.kind === 'file').length)
@@ -343,14 +345,18 @@ function App() {
     }
 
     const nextMode = mode === 'diff' && noteConflict() !== null ? 'diff' : 'plain'
+    const nextEditorPath = nextMode === 'diff' ? (noteConflict()?.path ?? currentPath()) : currentPath()
 
-    if (editor !== undefined && editorMode === nextMode) {
+    if (editor !== undefined && editorMode === nextMode && activeEditorPath === nextEditorPath) {
+      editor.setPath(nextEditorPath)
       editor.setValue(draftContent())
+      setEditorLanguageId(editor.getLanguageId())
       return
     }
 
     editor?.dispose()
     editor = undefined
+    activeEditorPath = null
 
     const monaco = await import('./editor/monaco.ts')
 
@@ -366,6 +372,7 @@ function App() {
       editor = monaco.createMonacoDiffEditor(editorElement, {
         originalValue: conflict.diskFile?.content ?? '',
         modifiedValue: draftContent(),
+        path: conflict.path,
         originalLabel: getConflictOriginalLabel(conflict),
         modifiedLabel: 'Current draft',
         onChange(value) {
@@ -374,11 +381,14 @@ function App() {
         },
       })
       editorMode = 'diff'
+      activeEditorPath = conflict.path
+      setEditorLanguageId(editor.getLanguageId())
       return
     }
 
     editor = monaco.createMonacoEditor(editorElement, {
       initialValue: draftContent(),
+      path: currentPath(),
       onChange(value) {
         setDraftContent(value)
         syncConflictDraft(value)
@@ -389,6 +399,8 @@ function App() {
       },
     })
     editorMode = 'plain'
+    activeEditorPath = currentPath()
+    setEditorLanguageId(editor.getLanguageId())
   }
 
   const noteContext: NoteContext = {
@@ -404,6 +416,10 @@ function App() {
     setEntries,
     setErrorMessage,
     setEditorValue(value) {
+      const path = currentPath()
+      editor?.setPath(path)
+      activeEditorPath = path
+      setEditorLanguageId(editor?.getLanguageId() ?? null)
       editor?.setValue(value)
     },
     loadedFileSnapshot,
@@ -1078,6 +1094,8 @@ function App() {
 
     clearPendingSave()
     editor?.dispose()
+    activeEditorPath = null
+    setEditorLanguageId(null)
   })
 
   return (
@@ -1160,6 +1178,8 @@ function App() {
       </main>
       <StatusBar
         conflict={conflictSummary()}
+        editorLanguage={editorLanguageId()}
+        editorPath={currentPath() ?? 'untitled.md'}
         errorMessage={errorMessage()}
         canReconnectFolder={reconnectableDirectoryName() !== null}
         canSync={storage() !== null}

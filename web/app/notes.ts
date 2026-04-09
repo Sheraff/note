@@ -378,6 +378,10 @@ async function createEntry(
     return getCreateErrorMessage(kind)
   }
 
+  if (kind === 'file' && isDotStorePath(normalizedName)) {
+    return getCreateErrorMessage(kind)
+  }
+
   const path = joinNotePath(parentPath, getConflictingEntryName(kind, normalizedName))
 
   if (context.entries().some((entry) => entry.path === path)) {
@@ -386,7 +390,7 @@ async function createEntry(
 
   try {
     if (kind === 'file') {
-      await currentStorage.writeTextFile(path, '# Untitled\n')
+      await currentStorage.writeTextFile(path, '')
       await refreshWorkspace(context, path)
       return null
     }

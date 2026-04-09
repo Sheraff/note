@@ -26,6 +26,8 @@ function renderStatusBar(overrides: Partial<StatusBarProps> = {}) {
     canReconnectFolder: false,
     canSync: true,
     conflict: null,
+    editorLanguage: 'markdown',
+    editorPath: 'notes/today.md',
     errorMessage: null,
     isSyncing: false,
     isOpfsActive: false,
@@ -72,6 +74,8 @@ describe('StatusBar', () => {
     })
 
     expect(screen.getByText('Folder access was not granted').textContent).toBe('Folder access was not granted')
+    expect(screen.getByText('markdown').textContent).toBe('markdown')
+    expect(document.querySelector('.seti-icon svg')).not.toBeNull()
     expect(screen.queryByRole('button', { name: /Reconnect / })).toBeNull()
     expect(getButtonByText('Attach folder').textContent).toContain('Attach folder')
     expect(getButtonByText('Use OPFS').textContent).toContain('Use OPFS')
@@ -83,6 +87,16 @@ describe('StatusBar', () => {
     expect(props.onAttachFolder).toHaveBeenCalledTimes(1)
     expect(props.onSwitchToOpfs).toHaveBeenCalledTimes(1)
     expect(props.onSync).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders the current Monaco language id', () => {
+    renderStatusBar({
+      editorLanguage: 'json',
+      editorPath: 'config.json',
+    })
+
+    expect(screen.getByText('json').textContent).toBe('json')
+    expect(document.querySelector('.seti-icon svg')).not.toBeNull()
   })
 
   it('shows reconnect actions and disables the OPFS switch when OPFS is already active', () => {

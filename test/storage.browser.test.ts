@@ -571,7 +571,6 @@ async function createNoteFromSidebar(page: Page, name: string): Promise<string> 
 
   await expect(noteButton).toBeVisible()
   await expect(noteButton).toHaveAttribute('aria-current', 'true')
-  await expectEditorToContain(page, '# Untitled')
 
   return notePath
 }
@@ -615,7 +614,6 @@ async function createNoteInFolderFromSidebar(
 
   await expect(noteButton).toBeVisible()
   await expect(noteButton).toHaveAttribute('aria-current', 'true')
-  await expectEditorToContain(page, '# Untitled')
   await waitForSyncIdle(page)
 
   return notePath
@@ -775,7 +773,7 @@ test('creates and saves a note in an attached folder, then restores it after reo
   await attachPickedFolder(page)
 
   const notePath = await createNoteFromSidebar(page, noteName)
-  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('# Untitled\n')
+  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('')
 
   const syncResponsePromise = waitForNextSyncPush(page)
   await replaceEditorContent(page, savedContent)
@@ -815,7 +813,7 @@ test('creates only the requested note in an empty folder when submitted with Ent
 
   const notePath = await createNoteInFolderFromSidebar(page, folderName, noteName, 'enter')
 
-  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('# Untitled\n')
+  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('')
   await expect.poll(async () => await readPickedFolderFile(page, `${folderName}/untitled.md`)).toBe(null)
   await expect(page.getByRole('button', { name: 'untitled.md', exact: true })).toHaveCount(0)
 })
@@ -838,14 +836,14 @@ test('creates only the requested note in an empty folder when submitted by blur'
 
   const notePath = await createNoteInFolderFromSidebar(page, folderName, noteName, 'blur')
 
-  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('# Untitled\n')
+  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('')
   await expect.poll(async () => await readPickedFolderFile(page, `${folderName}/untitled.md`)).toBe(null)
   await expect(page.getByRole('button', { name: 'untitled.md', exact: true })).toHaveCount(0)
 })
 
-test('selects only the basename when new note mode opens', async ({ page }) => {
+test('selects the entire file name when new note mode opens', async ({ page }) => {
   const runId = randomUUID()
-  const basenameEnd = 'untitled.md'.lastIndexOf('.')
+  const selectionEnd = 'untitled.md'.length
 
   await installStorageHarness(page, {
     appOpfsRootName: `app-opfs-${runId}`,
@@ -869,13 +867,13 @@ test('selects only the basename when new note mode opens', async ({ page }) => {
       end: input.selectionEnd,
       start: input.selectionStart,
     }
-  })).toEqual({ start: 0, end: basenameEnd })
+  })).toEqual({ start: 0, end: selectionEnd })
 })
 
 test('creates a new root note with the keyboard shortcut when no note is open', async ({ page }) => {
   const runId = randomUUID()
   const noteName = `shortcut-root-${runId}`
-  const basenameEnd = 'untitled.md'.lastIndexOf('.')
+  const selectionEnd = 'untitled.md'.length
 
   await installStorageHarness(page, {
     appOpfsRootName: `app-opfs-${runId}`,
@@ -899,7 +897,7 @@ test('creates a new root note with the keyboard shortcut when no note is open', 
       end: input.selectionEnd,
       start: input.selectionStart,
     }
-  })).toEqual({ start: 0, end: basenameEnd })
+  })).toEqual({ start: 0, end: selectionEnd })
 
   await input.fill(noteName)
   await input.press('Enter')
@@ -909,8 +907,7 @@ test('creates a new root note with the keyboard shortcut when no note is open', 
 
   await expect(noteButton).toBeVisible()
   await expect(noteButton).toHaveAttribute('aria-current', 'true')
-  await expectEditorToContain(page, '# Untitled')
-  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('# Untitled\n')
+  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('')
 })
 
 test('creates a new note in the open note folder with the keyboard shortcut while Monaco is focused', async ({ page }) => {
@@ -947,8 +944,7 @@ test('creates a new note in the open note folder with the keyboard shortcut whil
 
   await expect(noteButton).toBeVisible()
   await expect(noteButton).toHaveAttribute('aria-current', 'true')
-  await expectEditorToContain(page, '# Untitled')
-  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('# Untitled\n')
+  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('')
   await expect.poll(async () => await readPickedFolderFile(page, `${newNoteName}.md`)).toBe(null)
 })
 
@@ -1194,7 +1190,6 @@ test('keeps the current OPFS workspace active when attach folder permission is d
   await expect(page.locator('.statusbar-message')).toHaveText('Folder access was not granted')
   await expect(page.locator('.statusbar-storage').getByRole('button', { name: 'OPFS', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: notePath, exact: true })).toHaveAttribute('aria-current', 'true')
-  await expectEditorToContain(page, '# Untitled')
   await expect(page.getByRole('button', { name: pickedFolderName, exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: `Reconnect ${pickedFolderName}`, exact: true })).toHaveCount(0)
   await expect(page.locator('.editor-empty-panel')).toHaveCount(0)
@@ -1228,7 +1223,6 @@ test('keeps the current OPFS workspace active when attach folder is cancelled', 
 
   await expect(page.locator('.statusbar-storage').getByRole('button', { name: 'OPFS', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: notePath, exact: true })).toHaveAttribute('aria-current', 'true')
-  await expectEditorToContain(page, '# Untitled')
   await expect(page.locator('.statusbar-message')).toHaveText('')
   await expect(page.getByRole('button', { name: pickedFolderName, exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: `Reconnect ${pickedFolderName}`, exact: true })).toHaveCount(0)
@@ -1267,7 +1261,7 @@ test('offers to transfer OPFS notes and copies them into the picked folder when 
   await waitForSyncIdle(page)
 
   await expect(page.locator('.statusbar-storage').getByRole('button', { name: pickedFolderName, exact: true })).toBeVisible()
-  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('# Untitled\n')
+  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('')
   await expect.poll(async () => await listPickedFolderEntries(page)).toEqual([
     { kind: 'file', path: notePath },
     { kind: 'directory', path: emptyFolderPath },
@@ -1355,8 +1349,8 @@ test('switches to the picked folder without deleting synced notes when the trans
 
   await expect(page.locator('.statusbar-storage').getByRole('button', { name: pickedFolderName, exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: notePath, exact: true })).toBeVisible()
-  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('# Untitled\n')
-  await expect.poll(async () => await readOpfsFile(page, notePath)).toBe('# Untitled\n')
+  await expect.poll(async () => await readPickedFolderFile(page, notePath)).toBe('')
+  await expect.poll(async () => await readOpfsFile(page, notePath)).toBe('')
 })
 
 test('reattaching the same non-empty folder without transfer does not surface cloud conflicts after switching back to OPFS', async ({ page }) => {
@@ -2313,7 +2307,6 @@ test('shows the unsupported-browser attach error and keeps the OPFS workspace ac
     await expect(page.locator('.statusbar-message')).toHaveText('This browser does not support the File System Access API.')
     await expect(page.locator('.statusbar-storage').getByRole('button', { name: 'OPFS', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: notePath, exact: true })).toHaveAttribute('aria-current', 'true')
-    await expectEditorToContain(page, '# Untitled')
     await expect(page.getByRole('button', { name: pickedFolderName, exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: `Reconnect ${pickedFolderName}`, exact: true })).toHaveCount(0)
     await expect(page.locator('.editor-empty-panel')).toHaveCount(0)
