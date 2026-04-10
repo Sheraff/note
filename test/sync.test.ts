@@ -978,6 +978,148 @@ describe('client sync helpers', () => {
     expect(getBlob).not.toHaveBeenCalled()
   })
 
+  it('dedupes binary uploads and waits for them before pushing changes', async () => {
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+    const contentHash = await hashBytes(bytes)
+    const first = createStoredBinaryFile({
+      path: 'notes/first.png',
+      content: bytes,
+      contentHash,
+      updatedAt: '2026-04-03T11:00:00.000Z',
+    })
+    const second = createStoredBinaryFile({
+      path: 'notes/second.png',
+      content: Uint8Array.from(bytes),
+      contentHash,
+      updatedAt: '2026-04-03T11:05:00.000Z',
+    })
+    const storage = createMemoryStorage([first, second])
+    const uploadStarted = createDeferred()
+    const finishUpload = createDeferred()
+    const putBlob = vi.fn(async (hash: string, uploadedBytes: Uint8Array) => {
+      expect(hash).toBe(contentHash)
+      expect(uploadedBytes).toEqual(bytes)
+      uploadStarted.resolve()
+      await finishUpload.promise
+    })
+    const pushChanges = vi.fn(async (payload: { sinceCursor: number; changes: SyncChange[] }) => {
+      expect(payload.sinceCursor).toBe(0)
+      expect(payload.changes).toHaveLength(2)
+      expect(payload.changes.map((change) => change.path)).toEqual(['notes/first.png', 'notes/second.png'])
+
+      return {
+        files: [],
+        conflicts: [],
+        cursor: 1,
+      }
+    })
+
+    const syncPromise = syncWithServer({
+      api: {
+        putBlob,
+        pushChanges,
+      } as unknown as Parameters<typeof syncWithServer>[0]['api'],
+      previousState: {
+        files: [],
+        cursor: 0,
+        lastSyncedAt: null,
+      },
+      storage,
+    })
+
+    await uploadStarted.promise
+
+    expect(putBlob).toHaveBeenCalledTimes(1)
+    expect(pushChanges).not.toHaveBeenCalled()
+
+    finishUpload.resolve()
+    await syncPromise
+
+    expect(pushChanges).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not leave failed blob uploads unhandled while collecting later changes', async () => {
+    const firstBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+    const secondBytes = new Uint8Array([71, 78, 80, 137, 26, 10, 13, 10])
+    const first = createStoredBinaryFile({
+      path: 'notes/first.png',
+      content: firstBytes,
+      contentHash: await hashBytes(firstBytes),
+      updatedAt: '2026-04-03T11:00:00.000Z',
+    })
+    const second = createStoredBinaryFile({
+      path: 'notes/second.png',
+      content: secondBytes,
+      contentHash: await hashBytes(secondBytes),
+      updatedAt: '2026-04-03T11:05:00.000Z',
+    })
+    const baseStorage = createMemoryStorage([first, second])
+    const secondReadStarted = createDeferred()
+    const releaseSecondRead = createDeferred()
+    let secondReadCount = 0
+    const storage: NoteStorage = {
+      ...baseStorage,
+      async readFile(path) {
+        if (path === second.path) {
+          secondReadCount += 1
+
+          if (secondReadCount === 2) {
+            secondReadStarted.resolve()
+            await releaseSecondRead.promise
+          }
+        }
+
+        return baseStorage.readFile(path)
+      },
+    }
+    const uploadError = new Error('blob upload failed')
+    const putBlob = vi.fn(async (hash: string) => {
+      if (hash === first.contentHash) {
+        throw uploadError
+      }
+    })
+    const pushChanges = vi.fn(async () => {
+      return {
+        files: [],
+        conflicts: [],
+        cursor: 1,
+      }
+    })
+    const unhandledRejections: unknown[] = []
+    const handleUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason)
+    }
+
+    process.on('unhandledRejection', handleUnhandledRejection)
+
+    try {
+      const syncPromise = syncWithServer({
+        api: {
+          putBlob,
+          pushChanges,
+        } as unknown as Parameters<typeof syncWithServer>[0]['api'],
+        previousState: {
+          files: [],
+          cursor: 0,
+          lastSyncedAt: null,
+        },
+        storage,
+      })
+
+      await secondReadStarted.promise
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      releaseSecondRead.resolve()
+
+      await expect(syncPromise).rejects.toBe(uploadError)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(pushChanges).not.toHaveBeenCalled()
+      expect(unhandledRejections).toEqual([])
+    } finally {
+      process.off('unhandledRejection', handleUnhandledRejection)
+    }
+  })
+
   it('represents remote binary conflicts as lazy blob refs instead of inline bytes', async () => {
     const bytes = new Uint8Array([0, 1, 2, 3])
     const blobContent = await createBlobContent(bytes)

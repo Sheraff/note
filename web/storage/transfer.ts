@@ -1,4 +1,4 @@
-import { readStoredFile, toWriteFileInput, writeStoredFile, type ListedEntry, type NoteStorage } from './types.ts'
+import { toWriteFileInput, writeStoredFile, type ListedEntry, type NoteStorage } from './types.ts'
 
 export type StorageTransferConflict = {
   path: string
@@ -26,7 +26,7 @@ function compareEntriesForRemoval(left: ListedEntry, right: ListedEntry): number
 }
 
 async function readRequiredFile(storage: NoteStorage, path: string, action: string) {
-  const file = await readStoredFile(storage, path)
+  const file = await storage.readFile(path)
 
   if (file === null) {
     throw new Error(`Unable to read ${path} before ${action}`)

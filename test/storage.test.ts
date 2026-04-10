@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_APP_SETTINGS, type AppSettings, type SyncState } from '../web/schemas.ts'
 import { getStoredFileViewKind } from '../web/storage/file-classify.ts'
-import { readStoredFile, type NoteStorage } from '../web/storage/types.ts'
+import type { NoteStorage } from '../web/storage/types.ts'
 import { attachFolder, bootstrapWorkspace, reconnectFolder, type StorageContext } from '../web/app/storage.ts'
 
 const TEST_USER_ID = 'test-user'
@@ -76,6 +76,9 @@ function createStorage(key: NoteStorage['key'], label: string): NoteStorage {
     },
     async listFiles() {
       return []
+    },
+    async readFile() {
+      return null
     },
     async readTextFile() {
       return null
@@ -418,9 +421,9 @@ function describeStorageContract(name: string, setup: () => Promise<StorageHarne
       await writeFileToRoot(root, 'notes/.env.example', 'TOKEN=\n')
       await writeFileToRoot(root, 'notes/just-a-file', 'plain text\n')
 
-      const envFile = await readStoredFile(storage, 'notes/.env')
-      const exampleFile = await readStoredFile(storage, 'notes/.env.example')
-      const extensionlessFile = await readStoredFile(storage, 'notes/just-a-file')
+      const envFile = await storage.readFile('notes/.env')
+      const exampleFile = await storage.readFile('notes/.env.example')
+      const extensionlessFile = await storage.readFile('notes/just-a-file')
 
       expect(envFile).toMatchObject({ format: 'text', content: 'TOKEN=value\n' })
       expect(exampleFile).toMatchObject({ format: 'text', content: 'TOKEN=\n' })
@@ -440,7 +443,7 @@ function describeStorageContract(name: string, setup: () => Promise<StorageHarne
 
       await writeFileToRoot(root, 'notes/blob.data', binaryContent)
 
-      const file = await readStoredFile(storage, 'notes/blob.data')
+      const file = await storage.readFile('notes/blob.data')
 
       expect(await storage.readTextFile('notes/blob.data')).toBeNull()
 
@@ -458,7 +461,7 @@ function describeStorageContract(name: string, setup: () => Promise<StorageHarne
 
       await writeFileToRoot(root, 'notes/pixel.svg', svg)
 
-      const file = await readStoredFile(storage, 'notes/pixel.svg')
+      const file = await storage.readFile('notes/pixel.svg')
 
       if (file === null || file.format !== 'binary') {
         throw new Error('Expected svg files to stay binary image assets')

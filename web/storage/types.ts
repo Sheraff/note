@@ -59,23 +59,15 @@ export type NoteStorage = {
   cacheKey?: string
   label: string
   listEntries(): Promise<ListedEntry[]>
-  listFileStats?(): Promise<StoredFileStat[]>
+  listFileStats(): Promise<StoredFileStat[]>
   listFiles(): Promise<StoredFile[]>
-  readFile?(path: string): Promise<StoredFile | null>
+  readFile(path: string): Promise<StoredFile | null>
   writeFile?(path: string, file: WriteFileInput): Promise<StoredFile>
   readTextFile(path: string): Promise<StoredTextFile | null>
   writeTextFile(path: string, content: string): Promise<StoredTextFile>
   deleteEntry(path: string): Promise<void>
   createDirectory(path: string): Promise<void>
   renameEntry(path: string, nextPath: string, kind: ListedEntry['kind']): Promise<void>
-}
-
-export async function readStoredFile(storage: NoteStorage, path: string): Promise<StoredFile | null> {
-  if (storage.readFile !== undefined) {
-    return storage.readFile(path)
-  }
-
-  return storage.readTextFile(path)
 }
 
 export async function writeStoredFile(storage: NoteStorage, path: string, file: WriteFileInput): Promise<StoredFile> {

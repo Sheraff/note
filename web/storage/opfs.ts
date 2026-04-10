@@ -2,7 +2,6 @@ import { isDotStorePath, normalizeNotePath } from '../notes/paths.ts'
 import { createStoredFileFromFile } from './file-classify.ts'
 import {
   isTextStoredFile,
-  readStoredFile,
   toWriteFileInput,
   type ListedEntry,
   type NoteStorage,
@@ -262,7 +261,7 @@ export function createOpfsStorage(): NoteStorage {
           continue
         }
 
-        const file = await readStoredFile(this, entry.path)
+        const file = await this.readFile(entry.path)
 
         if (file !== null) {
           files.push(file)
@@ -284,7 +283,7 @@ export function createOpfsStorage(): NoteStorage {
       return writeStoredFile(await getRootDirectory(), path, file)
     },
     async readTextFile(path) {
-      const file = await readStoredFile(this, path)
+      const file = await this.readFile(path)
       return isTextStoredFile(file) ? file : null
     },
     async writeTextFile(path, content) {

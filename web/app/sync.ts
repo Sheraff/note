@@ -6,7 +6,6 @@ import { setSyncState } from '#web/storage/metadata.ts'
 import {
   isRemoteBlobFile,
   isTextStoredFile,
-  readStoredFile,
   toWriteFileInput,
   writeStoredFile,
   type NoteStorage,
@@ -122,7 +121,7 @@ async function runFullSync(context: SyncContext, storage: NoteStorage): Promise<
     const noteConflicts: NoteConflict[] = []
 
     for (const conflict of result.conflicts) {
-      noteConflicts.push(createSyncNoteConflict(conflict.path, await readStoredFile(storage, conflict.path), conflict.theirsFile))
+        noteConflicts.push(createSyncNoteConflict(conflict.path, await storage.readFile(conflict.path), conflict.theirsFile))
     }
 
     for (const queuedConflict of noteConflicts.slice(1)) {

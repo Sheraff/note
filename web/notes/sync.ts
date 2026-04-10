@@ -4,11 +4,9 @@ import { getLocalFileIndex, setLocalFileIndex, type LocalFileIndexEntry } from '
 import { getMimeTypeHintFromPath } from '#web/storage/file-paths.ts'
 import {
   createStoredTextFile,
-  readStoredFile,
   writeStoredFile,
   type NoteStorage,
   type RemoteBlobFile,
-  type StoredBinaryFile,
   type StoredFile,
   type StoredFileStat,
   type WriteFileInput,
@@ -29,6 +27,26 @@ type LocalManifestSnapshot = {
   indexByPath: Map<string, LocalFileIndexEntry>
   rereadFilesByPath: Map<string, StoredFile>
 }
+
+type LocalManifestChange =
+  | {
+    kind: 'upsert'
+    file: StoredFile
+    previous: ManifestEntry | undefined
+  }
+  | {
+    kind: 'delete'
+    previous: ManifestEntry
+  }
+
+type BinaryUploadResult =
+  | {
+    ok: true
+  }
+  | {
+    ok: false
+    error: unknown
+  }
 
 function areSameLocalManifestEntry(
   left: LocalManifestEntry | null | undefined,
@@ -76,6 +94,14 @@ function getTextContentSize(content: string): number {
 
 function getStoredFileSize(file: StoredFile): number {
   return file.size ?? (file.format === 'text' ? getTextContentSize(file.content) : file.content.byteLength)
+}
+
+function toStoredFileStat(file: StoredFile): StoredFileStat {
+  return {
+    path: file.path,
+    size: getStoredFileSize(file),
+    lastModified: Date.parse(file.updatedAt),
+  }
 }
 
 function toLocalManifestEntry(file: StoredFile): LocalManifestEntry {
@@ -168,47 +194,27 @@ function toManifestEntry(file: RemoteFile): ManifestEntry {
   }
 }
 
-async function listCurrentFileStats(storage: NoteStorage): Promise<StoredFileStat[]> {
-  if (storage.listFileStats !== undefined) {
-    return storage.listFileStats()
-  }
-
-  // TODO: based on usage, `storage.listFiles()` doesn't need to *return* the full array, this loads
-  // everything into memory. Instead we should process files one by one and yield stats as we go.
-  return (await storage.listFiles()).map((file) => ({
-    path: file.path,
-    size: getStoredFileSize(file),
-    lastModified: Date.parse(file.updatedAt),
-  }))
-}
-
 async function rereadLocalFileForManifest(
   storage: NoteStorage,
   path: string,
 ): Promise<{ file: StoredFile; manifest: LocalManifestEntry; stat: StoredFileStat } | null> {
-  const file = await readStoredFile(storage, path)
+  const file = await storage.readFile(path)
 
   if (file === null) {
     return null
   }
 
-  const lastModified = Date.parse(file.updatedAt)
-
   return {
     file,
     manifest: toLocalManifestEntry(file),
-    stat: {
-      path: file.path,
-      size: getStoredFileSize(file),
-      lastModified,
-    },
+    stat: toStoredFileStat(file),
   }
 }
 
 async function scanLocalManifest(storage: NoteStorage): Promise<LocalManifestSnapshot> {
   const [cachedEntries, stats] = await Promise.all([
     getLocalFileIndex(getStorageCacheKey(storage)),
-    listCurrentFileStats(storage),
+    storage.listFileStats(),
   ])
   const cachedByPath = new Map(cachedEntries.map((entry) => [entry.path, entry]))
   const manifest: LocalManifestEntry[] = []
@@ -242,7 +248,10 @@ async function scanLocalManifest(storage: NoteStorage): Promise<LocalManifestSna
     manifestByPath.set(reread.file.path, reread.manifest)
     statsByPath.set(reread.file.path, reread.stat)
     indexByPath.set(reread.file.path, indexEntry)
-    rereadFilesByPath.set(reread.file.path, reread.file)
+
+    if (reread.file.format === 'text') {
+      rereadFilesByPath.set(reread.file.path, reread.file)
+    }
   }
 
   await setLocalFileIndex(getStorageCacheKey(storage), sortByPath(indexByPath.values()))
@@ -256,55 +265,36 @@ async function scanLocalManifest(storage: NoteStorage): Promise<LocalManifestSna
   }
 }
 
-async function collectLocalChangesFromManifest(options: {
+async function* collectLocalChangesFromManifest(options: {
   previousRemoteFiles: ManifestEntry[]
   localSnapshot: LocalManifestSnapshot
-  now: string
   skippedPaths: ReadonlySet<string>
   storage: NoteStorage
-}): Promise<{
-  binaryFilesToUpload: StoredBinaryFile[]
-  changes: SyncChange[]
-}> {
+}): AsyncGenerator<LocalManifestChange> {
   const previousByPath = new Map(options.previousRemoteFiles.map((file) => [file.path, file]))
-  const binaryFilesToUpload: StoredBinaryFile[] = []
-  const changes: SyncChange[] = []
-  const upsertPaths: string[] = []
 
-  for (const file of options.localSnapshot.manifest) {
-    if (options.skippedPaths.has(file.path)) {
+  for (const manifestEntry of options.localSnapshot.manifest) {
+    if (options.skippedPaths.has(manifestEntry.path)) {
       continue
     }
 
-    const previous = previousByPath.get(file.path)
+    const previous = previousByPath.get(manifestEntry.path)
 
-    if (previous?.deletedAt === null && previous.contentHash === file.contentHash) {
+    if (previous?.deletedAt === null && previous.contentHash === manifestEntry.contentHash) {
       continue
     }
 
-    upsertPaths.push(file.path)
-  }
-
-  for (const path of upsertPaths) {
-    const previous = previousByPath.get(path)
-    const rereadFile = options.localSnapshot.rereadFilesByPath.get(path)
-    const file = rereadFile ?? (await readStoredFile(options.storage, path))
+    const file = options.localSnapshot.rereadFilesByPath.get(manifestEntry.path) ?? (await options.storage.readFile(manifestEntry.path))
 
     if (file === null) {
       continue
     }
 
-    if (file.format === 'binary') {
-      binaryFilesToUpload.push(file)
-    }
-
-    changes.push({
+    yield {
       kind: 'upsert',
-      path: file.path,
-      content: toRemoteContent(file),
-      updatedAt: file.updatedAt,
-      base: createBaseEntry(previous),
-    })
+      file,
+      previous,
+    }
   }
 
   for (const previous of options.previousRemoteFiles) {
@@ -312,31 +302,29 @@ async function collectLocalChangesFromManifest(options: {
       continue
     }
 
-    changes.push({
+    yield {
       kind: 'delete',
-      path: previous.path,
-      updatedAt: options.now,
-      base: createBaseEntry(previous),
-    })
-  }
-
-  return {
-    binaryFilesToUpload,
-    changes,
+      previous,
+    }
   }
 }
 
-async function uploadBinaryFiles(
+function createHandledBinaryUpload(
   api: ReturnType<typeof createApiClient>,
-  binaryFiles: StoredBinaryFile[],
-): Promise<void> {
-  const binaryFilesByHash = new Map(binaryFiles.map((file) => [file.contentHash, file]))
-
-  await Promise.all(
-    [...binaryFilesByHash.values()].map(async (file) => {
-      await api.putBlob(file.contentHash, file.content)
-    }),
+  file: Extract<StoredFile, { format: 'binary' }>,
+): Promise<BinaryUploadResult> {
+  return api.putBlob(file.contentHash, file.content).then(
+    () => ({ ok: true }),
+    (error) => ({ ok: false, error }),
   )
+}
+
+async function awaitBinaryUploads(uploadPromises: Iterable<Promise<BinaryUploadResult>>): Promise<void> {
+  for (const result of await Promise.all(uploadPromises)) {
+    if (!result.ok) {
+      throw result.error
+    }
+  }
 }
 
 async function writeRemoteFile(
@@ -439,7 +427,7 @@ function toLocalManifestSnapshot(files: StoredFile[]): LocalManifestSnapshot {
     manifestByPath,
     statsByPath,
     indexByPath,
-    rereadFilesByPath: new Map(files.map((file) => [file.path, file])),
+    rereadFilesByPath: new Map(files.filter((file) => file.format === 'text').map((file) => [file.path, file])),
   }
 }
 
@@ -456,7 +444,7 @@ export async function applyRemoteChanges(
       : Array.isArray(syncStartLocalSnapshot)
         ? toLocalManifestSnapshot(syncStartLocalSnapshot)
         : syncStartLocalSnapshot
-  const currentStatsByPath = new Map((await listCurrentFileStats(storage)).map((stat) => [stat.path, stat]))
+  const currentStatsByPath = new Map((await storage.listFileStats()).map((stat) => [stat.path, stat]))
   const nextIndexByPath = new Map(localSnapshot.indexByPath)
   let hasSkippedLocalChanges = false
 
@@ -563,22 +551,43 @@ export async function syncWithServer(options: {
 }> {
   const now = new Date().toISOString()
   const localSnapshot = await scanLocalManifest(options.storage)
-  const localChanges = await collectLocalChangesFromManifest({
+  const localChanges: SyncChange[] = []
+  const binaryUploadPromisesByHash = new Map<string, Promise<BinaryUploadResult>>()
+
+  for await (const change of collectLocalChangesFromManifest({
     previousRemoteFiles: options.previousState.files,
     localSnapshot,
-    now,
     skippedPaths: options.blockedPaths ?? new Set(),
     storage: options.storage,
-  })
+  })) {
+    if (change.kind === 'delete') {
+      localChanges.push({
+        kind: 'delete',
+        path: change.previous.path,
+        updatedAt: now,
+        base: createBaseEntry(change.previous),
+      })
+      continue
+    }
 
-  // TODO: here `localChanges.binaryFilesToUpload` may contain a lot of files, all loaded into memory,
-  // but we're just uploading them all separately, so we don't need to hold them all together.
-  // Instead it should be an async iterable, so we can read>upload files (even in parallel still) without holding everything in memory at once.
-  await uploadBinaryFiles(options.api, localChanges.binaryFilesToUpload)
+    if (change.file.format === 'binary' && !binaryUploadPromisesByHash.has(change.file.contentHash)) {
+      binaryUploadPromisesByHash.set(change.file.contentHash, createHandledBinaryUpload(options.api, change.file))
+    }
+
+    localChanges.push({
+      kind: 'upsert',
+      path: change.file.path,
+      content: toRemoteContent(change.file),
+      updatedAt: change.file.updatedAt,
+      base: createBaseEntry(change.previous),
+    })
+  }
+
+  await awaitBinaryUploads(binaryUploadPromisesByHash.values())
 
   const response = await options.api.pushChanges({
     sinceCursor: options.previousState.cursor,
-    changes: localChanges.changes,
+    changes: localChanges,
   })
   const conflicts = resolveSyncConflicts(response.conflicts)
   const blockedPaths = new Set<string>(options.blockedPaths ?? [])

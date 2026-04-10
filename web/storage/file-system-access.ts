@@ -3,7 +3,6 @@ import { createStoredFileFromFile } from './file-classify.ts'
 import {
   isDirectoryPickerSupported,
   isTextStoredFile,
-  readStoredFile,
   toWriteFileInput,
   type ListedEntry,
   type NoteStorage,
@@ -280,7 +279,7 @@ export function createDirectoryStorage(root: FileSystemDirectoryHandle, cacheKey
           continue
         }
 
-        const file = await readStoredFile(this, entry.path)
+        const file = await this.readFile(entry.path)
 
         if (file !== null) {
           files.push(file)
@@ -302,7 +301,7 @@ export function createDirectoryStorage(root: FileSystemDirectoryHandle, cacheKey
       return writeStoredFile(root, path, file)
     },
     async readTextFile(path) {
-      const file = await readStoredFile(this, path)
+      const file = await this.readFile(path)
       return isTextStoredFile(file) ? file : null
     },
     async writeTextFile(path, content) {

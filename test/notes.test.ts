@@ -45,8 +45,38 @@ function createStoredFileStub(
   })
 }
 
-function createMockStorage(error: Error): NoteStorage {
+function getStoredFileSize(file: StoredFile): number {
+  return file.size ?? (file.format === 'text' ? new TextEncoder().encode(file.content).length : file.content.byteLength)
+}
+
+function withStorageCapabilities(
+  storage: Omit<NoteStorage, 'listFileStats' | 'readFile'> & Partial<Pick<NoteStorage, 'listFileStats' | 'readFile'>>,
+): NoteStorage {
   return {
+    ...storage,
+    async listFileStats() {
+      if (storage.listFileStats !== undefined) {
+        return storage.listFileStats()
+      }
+
+      return (await storage.listFiles()).map((file) => ({
+        path: file.path,
+        size: getStoredFileSize(file),
+        lastModified: Date.parse(file.updatedAt),
+      }))
+    },
+    async readFile(path) {
+      if (storage.readFile !== undefined) {
+        return storage.readFile(path)
+      }
+
+      return storage.readTextFile(path)
+    },
+  }
+}
+
+function createMockStorage(error: Error): NoteStorage {
+  return withStorageCapabilities({
     key: 'directory',
     label: 'Notes',
     async listEntries() {
@@ -68,7 +98,7 @@ function createMockStorage(error: Error): NoteStorage {
     async renameEntry() {
       throw error
     },
-  }
+  })
 }
 
 function createMockContext(
@@ -135,7 +165,7 @@ describe('inline create errors', () => {
     const path = 'notes/config.json'
     const storedFile = await createStoredFile(path, '', '2026-04-08T10:00:00.000Z')
     const writeTextFile = vi.fn(async (nextPath: string, content: string) => createStoredFile(nextPath, content, '2026-04-08T10:00:00.000Z'))
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -151,7 +181,7 @@ describe('inline create errors', () => {
       async deleteEntry() {},
       async createDirectory() {},
       async renameEntry() {},
-    }
+    })
 
     const message = await createNote(createMockContext(storage, () => {}), 'notes', 'config.json')
 
@@ -163,7 +193,7 @@ describe('inline create errors', () => {
     const path = 'notes/plan.md'
     const storedFile = await createStoredFile(path, '', '2026-04-08T10:00:00.000Z')
     const writeTextFile = vi.fn(async (nextPath: string, content: string) => createStoredFile(nextPath, content, '2026-04-08T10:00:00.000Z'))
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -179,7 +209,7 @@ describe('inline create errors', () => {
       async deleteEntry() {},
       async createDirectory() {},
       async renameEntry() {},
-    }
+    })
 
     const message = await createNote(createMockContext(storage, () => {}), 'notes', 'plan')
 
@@ -189,7 +219,7 @@ describe('inline create errors', () => {
 
   it('rejects creating .DS_Store as a note', async () => {
     const writeTextFile = vi.fn(async (path: string, content: string) => createStoredFile(path, content, '2026-04-08T10:00:00.000Z'))
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -205,7 +235,7 @@ describe('inline create errors', () => {
       async deleteEntry() {},
       async createDirectory() {},
       async renameEntry() {},
-    }
+    })
 
     const message = await createNote(createMockContext(storage, () => {}), null, '.DS_Store')
 
@@ -232,7 +262,7 @@ describe('inline create errors', () => {
   })
 
   it('rejects renaming to another path segment', async () => {
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -250,7 +280,7 @@ describe('inline create errors', () => {
       async deleteEntry() {},
       async createDirectory() {},
       async renameEntry() {},
-    }
+    })
 
     const message = await renameEntry(
       createMockContext(storage, () => {}),
@@ -262,7 +292,7 @@ describe('inline create errors', () => {
   })
 
   it('rejects renaming a file to .DS_Store', async () => {
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -280,7 +310,7 @@ describe('inline create errors', () => {
       async deleteEntry() {},
       async createDirectory() {},
       renameEntry: vi.fn(),
-    }
+    })
 
     const message = await renameEntry(
       createMockContext(storage, () => {}, {
@@ -295,7 +325,7 @@ describe('inline create errors', () => {
   })
 
   it('returns a conflict when the target name already exists', async () => {
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -313,7 +343,7 @@ describe('inline create errors', () => {
       async deleteEntry() {},
       async createDirectory() {},
       async renameEntry() {},
-    }
+    })
 
     const message = await renameEntry(
       createMockContext(storage, () => {}, {
@@ -330,7 +360,7 @@ describe('inline create errors', () => {
   })
 
   it('treats renaming to the same name as a no-op', async () => {
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -348,7 +378,7 @@ describe('inline create errors', () => {
       async deleteEntry() {},
       async createDirectory() {},
       renameEntry: vi.fn(),
-    }
+    })
 
     const message = await renameEntry(
       createMockContext(storage, () => {}, {
@@ -369,7 +399,7 @@ describe('inline create errors', () => {
     const saveSettings = vi.fn(async () => {})
     const setEditorValue = vi.fn()
 
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -391,7 +421,7 @@ describe('inline create errors', () => {
       async deleteEntry() {},
       async createDirectory() {},
       renameEntry: renameEntryMock,
-    }
+    })
 
     const settings = createSettings({
       backend: 'directory',
@@ -441,7 +471,7 @@ describe('inline create errors', () => {
     const renameEntryMock = vi.fn(async () => {})
     const setCurrentPath = vi.fn()
 
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -466,7 +496,7 @@ describe('inline create errors', () => {
       async deleteEntry() {},
       async createDirectory() {},
       renameEntry: renameEntryMock,
-    }
+    })
 
     const settings = createSettings({
       backend: 'directory',
@@ -514,7 +544,7 @@ describe('moveEntry', () => {
     const saveSettings = vi.fn(async () => {})
     const setEditorValue = vi.fn()
 
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -539,7 +569,7 @@ describe('moveEntry', () => {
       async deleteEntry() {},
       async createDirectory() {},
       renameEntry: renameEntryMock,
-    }
+    })
 
     const settings = createSettings({
       backend: 'directory',
@@ -602,7 +632,7 @@ describe('moveEntry', () => {
     const saveSettings = vi.fn(async () => {})
     const setEditorValue = vi.fn()
 
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -628,7 +658,7 @@ describe('moveEntry', () => {
       async deleteEntry() {},
       async createDirectory() {},
       renameEntry: renameEntryMock,
-    }
+    })
 
     const settings = createSettings({
       backend: 'directory',
@@ -686,7 +716,7 @@ describe('moveEntry', () => {
   })
 
   it('returns a conflict when the destination folder already has a file with the same name', async () => {
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -704,7 +734,7 @@ describe('moveEntry', () => {
       async deleteEntry() {},
       async createDirectory() {},
       renameEntry: vi.fn(),
-    }
+    })
 
     const result = await moveEntry(
       createMockContext(storage, () => {}, {
@@ -727,7 +757,7 @@ describe('moveEntry', () => {
   })
 
   it('treats moving a file to its current folder as a no-op', async () => {
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -745,7 +775,7 @@ describe('moveEntry', () => {
       async deleteEntry() {},
       async createDirectory() {},
       renameEntry: vi.fn(),
-    }
+    })
 
     const result = await moveEntry(createMockContext(storage, () => {}), { kind: 'file', path: 'notes/today.md' }, 'notes')
 
@@ -757,7 +787,7 @@ describe('moveEntry', () => {
   })
 
   it('rejects moving a folder into itself', async () => {
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -775,7 +805,7 @@ describe('moveEntry', () => {
       async deleteEntry() {},
       async createDirectory() {},
       renameEntry: vi.fn(),
-    }
+    })
 
     const result = await moveEntry(createMockContext(storage, () => {}), { kind: 'directory', path: 'projects' }, 'projects')
 
@@ -787,7 +817,7 @@ describe('moveEntry', () => {
   })
 
   it('rejects moving a folder into a descendant folder', async () => {
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -805,7 +835,7 @@ describe('moveEntry', () => {
       async deleteEntry() {},
       async createDirectory() {},
       renameEntry: vi.fn(),
-    }
+    })
 
     const result = await moveEntry(
       createMockContext(storage, () => {}),
@@ -827,7 +857,7 @@ describe('saveCurrentNote', () => {
     const writeTextFile = vi.fn(async () => storedFile)
     const setNoteConflict = vi.fn()
 
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -843,7 +873,7 @@ describe('saveCurrentNote', () => {
       async deleteEntry() {},
       async createDirectory() {},
       async renameEntry() {},
-    }
+    })
 
     const result = await saveCurrentNote(
       createMockContext(storage, () => {}, {
@@ -869,7 +899,7 @@ describe('saveCurrentNote', () => {
     const setNoteConflict = vi.fn()
     const saveSettings = vi.fn(async () => {})
 
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -887,7 +917,7 @@ describe('saveCurrentNote', () => {
       async deleteEntry() {},
       async createDirectory() {},
       async renameEntry() {},
-    }
+    })
 
     const result = await saveCurrentNote(
       createMockContext(storage, () => {}, {
@@ -925,7 +955,7 @@ describe('saveCurrentNote', () => {
     const writeTextFile = vi.fn(async () => diskFile)
     const setNoteConflict = vi.fn()
 
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -941,7 +971,7 @@ describe('saveCurrentNote', () => {
       async deleteEntry() {},
       async createDirectory() {},
       async renameEntry() {},
-    }
+    })
 
     const result = await saveCurrentNote(
       createMockContext(storage, () => {}, {
@@ -990,7 +1020,7 @@ describe('saveCurrentNote', () => {
     const writeTextFile = vi.fn(async () => snapshot)
     const setNoteConflict = vi.fn()
 
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -1009,7 +1039,7 @@ describe('saveCurrentNote', () => {
       async deleteEntry() {},
       async createDirectory() {},
       async renameEntry() {},
-    }
+    })
 
     const result = await saveCurrentNote(
       createMockContext(storage, () => {}, {
@@ -1062,7 +1092,7 @@ describe('refreshWorkspace', () => {
     const setLoadedFileSnapshot = vi.fn()
     const saveSettings = vi.fn(async () => {})
 
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -1080,7 +1110,7 @@ describe('refreshWorkspace', () => {
       async deleteEntry() {},
       async createDirectory() {},
       async renameEntry() {},
-    }
+    })
 
     await refreshWorkspace(
       createMockContext(storage, () => {}, {
@@ -1121,7 +1151,7 @@ describe('refreshWorkspace', () => {
     const setLoadedFileSnapshot = vi.fn()
     const saveSettings = vi.fn(async () => {})
 
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -1139,7 +1169,7 @@ describe('refreshWorkspace', () => {
       async deleteEntry() {},
       async createDirectory() {},
       async renameEntry() {},
-    }
+    })
 
     await refreshWorkspace(
       createMockContext(storage, () => {}, {
@@ -1180,7 +1210,7 @@ describe('refreshWorkspace', () => {
     const setLoadedFileSnapshot = vi.fn()
     const saveSettings = vi.fn(async () => {})
 
-    const storage: NoteStorage = {
+    const storage: NoteStorage = withStorageCapabilities({
       key: 'directory',
       label: 'Notes',
       async listEntries() {
@@ -1198,7 +1228,7 @@ describe('refreshWorkspace', () => {
       async deleteEntry() {},
       async createDirectory() {},
       async renameEntry() {},
-    }
+    })
 
     await refreshWorkspace(
       createMockContext(storage, () => {}, {

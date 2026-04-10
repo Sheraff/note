@@ -53,7 +53,6 @@ import {
 import {
   isRemoteBlobFile,
   isTextStoredFile,
-  readStoredFile,
   toWriteFileInput,
   writeStoredFile,
   type ListedEntry,
@@ -432,7 +431,7 @@ function App() {
       path: currentPath(),
       async readFile(path) {
         const currentStorage = storage()
-        return currentStorage === null ? null : readStoredFile(currentStorage, path)
+        return currentStorage === null ? null : currentStorage.readFile(path)
       },
       onChange(value) {
         setDraftContent(value)
@@ -656,7 +655,7 @@ function App() {
     for (let attempt = 0; ; attempt += 1) {
       const candidate = createConflictCopyPath(path, timestamp, attempt)
 
-      if ((await readStoredFile(currentStorage, candidate)) === null) {
+      if ((await currentStorage.readFile(candidate)) === null) {
         return candidate
       }
     }

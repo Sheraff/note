@@ -12,7 +12,6 @@ import type { AppSettings } from '#web/schemas.ts'
 import {
   createStoredTextFile,
   isTextStoredFile,
-  readStoredFile,
   type ListedEntry,
   type NoteStorage,
   type RemoteBlobFile,
@@ -217,7 +216,7 @@ export async function loadNote(context: NoteContext, path: string | null): Promi
     return
   }
 
-  const file = await readStoredFile(currentStorage, path)
+  const file = await currentStorage.readFile(path)
 
   if (file === null) {
     await refreshWorkspace(context, null)
@@ -247,7 +246,7 @@ export async function refreshWorkspace(
     return
   }
 
-  const nextFile = await readStoredFile(currentStorage, nextPath)
+  const nextFile = await currentStorage.readFile(nextPath)
 
   if (nextFile === null) {
     await refreshWorkspace(context, null, options)
@@ -271,7 +270,7 @@ export async function saveCurrentNote(context: NoteContext): Promise<SaveCurrent
 
   const draftContent = context.draftContent()
   const loadedSnapshot = context.loadedFileSnapshot()
-  const diskFile = await readStoredFile(currentStorage, path)
+  const diskFile = await currentStorage.readFile(path)
 
   if (loadedSnapshot !== null && !isTextStoredFile(loadedSnapshot)) {
     clearConflictForPath(context, path)
