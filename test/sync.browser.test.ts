@@ -180,6 +180,21 @@ async function focusPlainEditorInput(page: Page): Promise<void> {
   await input.focus()
 }
 
+async function readPlainEditorCursorPosition(page: Page): Promise<{ left: number; top: number }> {
+  const cursor = page.locator('.monaco-editor .cursors-layer .cursor').last()
+
+  await expect(cursor).toBeVisible()
+
+  return cursor.evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+
+    return {
+      left: rect.left,
+      top: rect.top,
+    }
+  })
+}
+
 async function replaceEditorContent(page: Page, content: string): Promise<void> {
   const editor = page.locator('.monaco-editor').last()
   const expectedLines = content
@@ -872,6 +887,42 @@ test('persists only sync metadata in IndexedDB, not note contents', async ({ pag
   expect(storedFile).not.toHaveProperty('content')
 })
 
+test('does not log duplicate Monaco model errors while opening and switching notes', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-monaco-model-${runId}`
+  const firstPath = `sync-monaco-model-${runId}/first.md`
+  const secondPath = `sync-monaco-model-${runId}/second.md`
+  const duplicateModelErrors: string[] = []
+  const handleConsole = (message: { type(): string; text(): string }) => {
+    if (message.type() === 'error' && message.text().includes('ModelService: Cannot add model because it already exists!')) {
+      duplicateModelErrors.push(message.text())
+    }
+  }
+
+  page.on('console', handleConsole)
+
+  try {
+    await setupSyncedWorkspace(
+      page,
+      request,
+      [
+        { path: firstPath, content: '# First\n' },
+        { path: secondPath, content: '# Second\n' },
+      ],
+      userId,
+    )
+
+    await ensureFileIsOpen(page, secondPath)
+    await ensureFileIsOpen(page, firstPath)
+    await waitForSyncIdle(page)
+    await page.waitForTimeout(100)
+  } finally {
+    page.off('console', handleConsole)
+  }
+
+  expect(duplicateModelErrors).toEqual([])
+})
+
 test('keeps the Monaco cursor position stable while autosave and sync run', async ({ page, request }) => {
   const runId = randomUUID()
   const userId = `sync-cursor-${runId}`
@@ -1080,6 +1131,123 @@ test('keeps typing at the same cursor position after a lifecycle-triggered sync'
   })
 
   expect(continuedTypingRequests).toEqual({ manifest: 0, push: 1 })
+  await expectEditorToContain(page, 'Alpha [first][second]Beta Gamma')
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(expectedContent)
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(expectedContent)
+})
+
+test('keeps typing at the same cursor position when a prior sync finishes mid-typing', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-mid-typing-${runId}`
+  const path = `sync-mid-typing-${runId}/mid-typing.md`
+  const baseContent = '# Header\nLine before\nAlpha Beta Gamma\n'
+  const expectedContent = '# Header\nLine before\nAlpha [first][second]Beta Gamma\n'
+  let pushCount = 0
+  let resolveFirstPushStarted: ((value: void | PromiseLike<void>) => void) | undefined
+  let releaseFirstPush: (() => void) | undefined
+  const firstPushStarted = new Promise<void>((resolve) => {
+    resolveFirstPushStarted = resolve
+  })
+  const firstPushGate = new Promise<void>((resolve) => {
+    releaseFirstPush = () => {
+      resolve()
+    }
+  })
+
+  await setupSyncedWorkspace(page, request, [{ path, content: baseContent }], userId)
+
+  await page.route('**/api/sync/push', async (route) => {
+    pushCount += 1
+
+    if (pushCount === 1) {
+      resolveFirstPushStarted?.(undefined)
+      await firstPushGate
+    }
+
+    await route.continue()
+  })
+
+  const noteButton = page.getByRole('button', { name: 'mid-typing.md', exact: true })
+
+  await expect(noteButton).toBeVisible()
+  await expect(noteButton).toHaveAttribute('aria-current', 'true')
+  await expectEditorToContain(page, 'Alpha Beta Gamma')
+
+  await focusPlainEditorInput(page)
+  await page.keyboard.press('ControlOrMeta+Home')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+
+  for (let step = 0; step < 'Alpha '.length; step += 1) {
+    await page.keyboard.press('ArrowRight')
+  }
+
+  await page.keyboard.insertText('[first]')
+  await firstPushStarted
+
+  const continuedTyping = page.keyboard.type('[second]', { delay: 40 })
+
+  await page.waitForTimeout(120)
+  releaseFirstPush?.()
+  await continuedTyping
+
+  await waitForSyncIdle(page)
+  await expect.poll(() => pushCount).toBe(2)
+  await expect(page.getByRole('button', { name: /File conflict:/ })).toHaveCount(0)
+  await expectEditorToContain(page, 'Alpha [first][second]Beta Gamma')
+  await expect.poll(async () => await readOpfsFile(page, path)).toBe(expectedContent)
+  await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(expectedContent)
+})
+
+test('keeps typing at the same cursor position when a lifecycle sync flushes a pending save mid-typing', async ({ page, request }) => {
+  const runId = randomUUID()
+  const userId = `sync-lifecycle-mid-typing-${runId}`
+  const path = `sync-lifecycle-mid-typing-${runId}/lifecycle-mid-typing.md`
+  const baseContent = '# Header\nLine before\nAlpha Beta Gamma\n'
+  const expectedContent = '# Header\nLine before\nAlpha [first][second]Beta Gamma\n'
+
+  await installDateNowHarness(page)
+  await setupSyncedWorkspace(page, request, [{ path, content: baseContent }], userId)
+
+  const noteButton = page.getByRole('button', { name: 'lifecycle-mid-typing.md', exact: true })
+
+  await expect(noteButton).toBeVisible()
+  await expect(noteButton).toHaveAttribute('aria-current', 'true')
+  await expectEditorToContain(page, 'Alpha Beta Gamma')
+
+  await focusPlainEditorInput(page)
+  await page.keyboard.press('ControlOrMeta+Home')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+
+  for (let step = 0; step < 'Alpha '.length; step += 1) {
+    await page.keyboard.press('ArrowRight')
+  }
+
+  const initialCursor = await readPlainEditorCursorPosition(page)
+
+  await advanceDateNow(page, 11_000)
+
+  const syncRequests = await countSyncRequestsDuring(
+    page,
+    async () => {
+      await page.evaluate(() => {
+        window.setTimeout(() => {
+          window.dispatchEvent(new Event('focus'))
+        }, 120)
+      })
+      await page.keyboard.type('[first][second]', { delay: 40 })
+    },
+    { settleMs: 900 },
+  )
+
+  expect(syncRequests).toEqual({ manifest: 0, push: 2 })
+  const finalCursor = await readPlainEditorCursorPosition(page)
+
+  expect(finalCursor.top).toBeGreaterThan(initialCursor.top - 3)
+  expect(finalCursor.top).toBeLessThan(initialCursor.top + 3)
+  expect(finalCursor.left).toBeGreaterThan(initialCursor.left)
+  await expect(page.getByRole('button', { name: /File conflict:/ })).toHaveCount(0)
   await expectEditorToContain(page, 'Alpha [first][second]Beta Gamma')
   await expect.poll(async () => await readOpfsFile(page, path)).toBe(expectedContent)
   await expect.poll(async () => (await getRemoteFile(request, path, userId))?.content ?? null).toBe(expectedContent)

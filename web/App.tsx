@@ -113,6 +113,7 @@ function App() {
   let editor: MonacoController | undefined
   let editorMode: EditorMode = 'plain'
   let activeEditorPath: string | null = null
+  let editorMountVersion = 0
   let saveTimeout: number | undefined
   let autoSyncInterval: number | undefined
   let activeSyncOpenNoteSnapshots: Map<string, OpenNoteSyncSnapshot> | null = null
@@ -374,6 +375,8 @@ function App() {
       return
     }
 
+    const mountVersion = ++editorMountVersion
+
     const conflict = noteConflict()
     const nextMode = mode === 'diff' && conflict?.kind === 'text' ? 'diff' : 'plain'
     const nextEditorPath = nextMode === 'diff' ? (conflict?.path ?? currentPath()) : currentPath()
@@ -389,8 +392,6 @@ function App() {
     }
 
     if (editor !== undefined && editorMode === nextMode && activeEditorPath === nextEditorPath) {
-      editor.setPath(nextEditorPath)
-      editor.setValue(draftContent())
       editor.refresh()
       setEditorLanguageId(editor.getLanguageId())
       return
@@ -401,6 +402,10 @@ function App() {
     activeEditorPath = null
 
     const monaco = await import('./editor/monaco.ts')
+
+    if (mountVersion !== editorMountVersion || editorElement === undefined) {
+      return
+    }
 
     if (nextMode === 'diff') {
       if (conflict === null || conflict.kind !== 'text') {
